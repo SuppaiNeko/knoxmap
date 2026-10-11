@@ -86,6 +86,7 @@ function setSelection(layer) {
 map.on(L.Draw.Event.CREATED, (e) => {
   // The area selection and the drawing palette both finish a shape the same
   // way; which of them it belongs to is which of them armed the handler.
+  if (zoneTookShape(e.layer)) return;
   if (sketchKind) {
     const kind = sketchKind;
     stopSketch();
@@ -953,6 +954,7 @@ async function openMap(mapName) {
   // be changed and put into it without setting all the others again.
   if (data.settings && settingsMeta) buildSettingsForm(data.settings);
   // Whatever was drawn for this map, back on the map to be added to or changed.
+  loadZones(data.mapName);
   fetch(`/api/sketch/${encodeURIComponent(data.mapName)}`)
     .then(r => r.json())
     .then(loadSketchGeoJSON)
@@ -2017,6 +2019,27 @@ function sketchLabel(kind) {
   return (sketchPalette.find(e => e.id === kind) || {}).label || kind;
 }
 
+// Under headings, in the server's order. Thirty-four tools in one run is a
+// wall to read, and nobody hunting for "Hedge" wants to scan past "Motorway".
+function paletteMarkup() {
+  const groups = [];
+  for (const entry of sketchPalette) {
+    const name = entry.group || 'Other';
+    const last = groups[groups.length - 1];
+    if (!last || last.name !== name) groups.push({ name, items: [entry] });
+    else last.items.push(entry);
+  }
+  return groups.map(g => `<div class="palette-group">
+      <span class="palette-head">${escapeHtml(g.name)}</span>
+      ${g.items.map(e => `<button type="button" class="sketch-pick"
+        data-kind="${e.id}" data-geometry="${e.geometry}"
+        title="${escapeHtml(Object.entries(e.tags)
+          .map(([k, v]) => k + '=' + v).join(', '))}">
+        <span class="swatch" style="background:${SKETCH_COLOURS[e.category] || '#a5e266'}"></span>
+        ${escapeHtml(e.label)}</button>`).join('')}
+    </div>`).join('');
+}
+
 async function loadSketchPalette() {
   let data;
   try {
@@ -2028,12 +2051,7 @@ async function loadSketchPalette() {
     e => ({ ...e, category: (data.categories || {})[e.id] }));
   const box = document.getElementById('sketchPalette');
   if (!box) return;
-  box.innerHTML = sketchPalette.map(e =>
-    `<button type="button" class="sketch-pick" data-kind="${e.id}"
-      data-geometry="${e.geometry}" title="${escapeHtml(Object.entries(e.tags)
-        .map(([k, v]) => k + '=' + v).join(', '))}">
-      <span class="swatch" style="background:${SKETCH_COLOURS[e.category] || '#a5e266'}"></span>
-      ${escapeHtml(e.label)}</button>`).join('');
+  box.innerHTML = paletteMarkup();
   box.addEventListener('click', ev => {
     const btn = ev.target.closest('.sketch-pick');
     if (btn) startSketch(btn.dataset.kind, btn.dataset.geometry);
@@ -2352,3 +2370,1054 @@ document.getElementById('editReset').addEventListener('click', async () => {
   await loadEditable();
   noteEdit('Every change undone. The map is back to what was downloaded.');
 });
+
+// ---- the drawing board ------------------------------------------------------
+//
+// The editor's own screen: a blank sheet measured in metres, with no world
+// under it, for laying out a town that does not exist anywhere. It is a
+// Leaflet map with L.CRS.Simple and no tiles, which buys the panning, the
+// zooming, the drawing and the corner-dragging that are already working on
+// the world map, without pretending the sheet is a place.
+//
+// A point on the sheet is (x, y) in metres from the bottom-left corner, which
+// is how somebody laying out a town thinks. Leaflet wants (lat, lng), so the
+// two are swapped at the edges here and nowhere else; the server turns metres
+// into the world when it builds (generator/sketch.py, design_to_drawn).
+let boardMap = null;
+let boardLayer = null;
+let boardSheet = null;          // the rectangle showing the edge of the sheet
+let boardGrid = null;
+let boardKind = null;
+let boardHandler = null;
+let boardPicked = null;
+let boardOpened = null;         // the map whose sheet this is, once it has one
+let boardFitted = false;        // whether the sheet has been framed on screen
+
+const BOARD_GRID_M = 100;
+
+function boardSize() {
+  const w = parseFloat(document.getElementById('boardWidth').value) || 900;
+  const h = parseFloat(document.getElementById('boardHeight').value) || 900;
+  return { w: Math.min(Math.max(w, 100), 40000), h: Math.min(Math.max(h, 100), 40000) };
+}
+
+function boardNote(text) {
+  const box = document.getElementById('boardNote');
+  if (box) box.textContent = text || '';
+}
+
+function boardShowCount() {
+  const n = boardLayer ? boardLayer.getLayers().length : 0;
+  const badge = document.getElementById('boardCount');
+  const { w, h } = boardSize();
+  if (badge) badge.textContent = `${w} × ${h} m · ${n} thing${n === 1 ? '' : 's'}`;
+}
+
+// The sheet's edge and a grid every hundred metres, so a street can be put
+// somewhere on purpose rather than somewhere about right.
+function boardDrawSheet() {
+  const { w, h } = boardSize();
+  if (boardSheet) boardMap.removeLayer(boardSheet);
+  if (boardGrid) boardMap.removeLayer(boardGrid);
+  // Both go in the pane under the drawing rather than being shuffled there
+  // afterwards: bringToBack() reaches for the renderer's container, which on
+  // a map that has only just been given a size does not exist yet, and it
+  // threw before a single line of the sheet was drawn.
+  boardSheet = L.rectangle([[0, 0], [h, w]], {
+    pane: 'tilePane', color: '#a5e266', weight: 2, fill: true,
+    fillColor: '#0b0d0b', fillOpacity: 1, interactive: false }).addTo(boardMap);
+  const lines = [];
+  for (let x = BOARD_GRID_M; x < w; x += BOARD_GRID_M) lines.push([[0, x], [h, x]]);
+  for (let y = BOARD_GRID_M; y < h; y += BOARD_GRID_M) lines.push([[y, 0], [y, w]]);
+  boardGrid = L.polyline(lines, { pane: 'tilePane', color: '#2b3326',
+                                  weight: 1, interactive: false }).addTo(boardMap);
+  boardMap.setMaxBounds([[-h * 0.1, -w * 0.1], [h * 1.1, w * 1.1]]);
+  boardShowCount();
+}
+
+function boardFit() {
+  const { w, h } = boardSize();
+  // Not on the next animation frame: those do not come at all while the
+  // window is behind another one, and the board would open unfitted - a map
+  // the browser still thinks is nothing wide fits at the closest zoom there
+  // is, leaving the sheet thousands of pixels off every edge. A timeout runs
+  // either way, and the resize below catches the case where the panel is laid
+  // out later still.
+  setTimeout(() => {
+    boardMap.invalidateSize();
+    if (boardMap.getSize().x > 0) {
+      boardMap.fitBounds([[0, 0], [h, w]], { padding: [24, 24] });
+    }
+  }, 0);
+}
+
+function boardStyleFor(kind) {
+  return sketchStyle(kind);
+}
+
+function boardAdd(kind, layer, silent) {
+  layer.boardKind = kind;
+  if (layer.setStyle) layer.setStyle(boardStyleFor(kind));
+  layer.bindTooltip(sketchLabel(kind), { sticky: true });
+  layer.on('click', ev => { L.DomEvent.stop(ev); boardPick(layer); });
+  boardLayer.addLayer(layer);
+  boardShowCount();
+  if (!silent) boardNote(`${sketchLabel(kind)} added.`);
+}
+
+function boardPick(layer) {
+  if (boardPicked && boardPicked.setStyle) {
+    boardPicked.setStyle(boardStyleFor(boardPicked.boardKind));
+  }
+  boardPicked = layer;
+  const box = document.getElementById('boardPicked');
+  if (!layer) { box.hidden = true; box.innerHTML = ''; return; }
+  layer.setStyle({ color: '#ff5f5f', weight: 4 });
+  box.hidden = false;
+  box.innerHTML = `<span class="hint">${escapeHtml(sketchLabel(layer.boardKind))}</span>
+    <button type="button" id="boardDelete" class="btn">Remove</button>`;
+  document.getElementById('boardDelete').addEventListener('click', () => {
+    boardLayer.removeLayer(layer);
+    boardPick(null);
+    boardShowCount();
+    boardNote('Removed.');
+  });
+}
+
+function boardStop() {
+  if (boardHandler) { boardHandler.disable(); boardHandler = null; }
+  boardKind = null;
+  for (const b of document.querySelectorAll('#boardPalette .sketch-pick')) {
+    b.classList.remove('on');
+  }
+}
+
+function boardStart(kind, geometry) {
+  boardStop();
+  boardPick(null);
+  boardKind = kind;
+  const style = boardStyleFor(kind);
+  if (geometry === 'line') {
+    boardHandler = new L.Draw.Polyline(boardMap, { shapeOptions: style });
+  } else if (geometry === 'area') {
+    boardHandler = new L.Draw.Polygon(boardMap, {
+      allowIntersection: false, shapeOptions: style });
+  } else {
+    boardHandler = new L.Draw.Marker(boardMap, {});
+  }
+  boardHandler.enable();
+  for (const b of document.querySelectorAll('#boardPalette .sketch-pick')) {
+    b.classList.toggle('on', b.dataset.kind === kind);
+  }
+  boardNote(`Drawing ${sketchLabel(kind)}. Double-click to finish.`);
+}
+
+function boardPaletteInto(box) {
+  box.innerHTML = paletteMarkup();
+  box.addEventListener('click', ev => {
+    const btn = ev.target.closest('.sketch-pick');
+    if (btn) boardStart(btn.dataset.kind, btn.dataset.geometry);
+  });
+}
+
+// What is on the sheet, in metres, as the server stores and reads it.
+function boardDesign() {
+  const { w, h } = boardSize();
+  const features = [];
+  boardLayer.eachLayer(layer => {
+    if (!layer.boardKind) return;
+    const geo = layer.toGeoJSON().geometry;
+    let ring;
+    if (geo.type === 'Polygon') ring = geo.coordinates[0];
+    else if (geo.type === 'LineString') ring = geo.coordinates;
+    else if (geo.type === 'Point') ring = [geo.coordinates];
+    else return;
+    // GeoJSON from a CRS.Simple map is [lng, lat] = [x, y] already. Kept on
+    // the sheet: it can be drawn past the edge, and a road at x = 1342 on a
+    // 900 m sheet is simply off the map, which is not what somebody dragging
+    // a street to the edge of the page meant.
+    const clamp = (v, hi) => Math.min(Math.max(v, 0), hi);
+    features.push({ kind: layer.boardKind,
+                    points: ring.map(([x, y]) => [clamp(x, w), clamp(y, h)]) });
+  });
+  return { width_m: w, height_m: h,
+           anchor: { lat: 0.0, lon: 0.0 }, features };
+}
+
+function boardLoadDesign(design) {
+  boardLayer.clearLayers();
+  boardPick(null);
+  if (!design) { boardShowCount(); return; }
+  document.getElementById('boardWidth').value = design.width_m || 900;
+  document.getElementById('boardHeight').value = design.height_m || 900;
+  boardDrawSheet();
+  for (const f of design.features || []) {
+    const entry = sketchPalette.find(e => e.id === f.kind);
+    if (!entry) continue;
+    const pts = (f.points || []).map(([x, y]) => [y, x]);   // back to (lat, lng)
+    let layer = null;
+    if (entry.geometry === 'area' && pts.length >= 3) layer = L.polygon(pts);
+    else if (entry.geometry === 'line' && pts.length >= 2) layer = L.polyline(pts);
+    else if (entry.geometry === 'point' && pts.length) layer = L.marker(pts[0]);
+    if (layer) boardAdd(f.kind, layer, true);
+  }
+  boardFit();
+  boardShowCount();
+}
+
+function boardOpen(mapName) {
+  const panel = document.getElementById('board');
+  panel.hidden = false;
+  if (!boardMap) {
+    boardMap = L.map('boardMap', {
+      crs: L.CRS.Simple, minZoom: -6, maxZoom: 4, zoomControl: true,
+      attributionControl: false });
+    // A Leaflet map needs somewhere to be looking before anything can be put
+    // on it or measured against it; fitting the sheet refines this a moment
+    // later, once the panel it lives in has a size.
+    boardMap.setView([450, 450], 0);
+    boardLayer = new L.FeatureGroup().addTo(boardMap);
+    boardMap.on(L.Draw.Event.CREATED, e => {
+      const kind = boardKind;
+      boardStop();
+      if (kind) boardAdd(kind, e.layer);
+    });
+    // The first size the map gets may arrive after it was opened, if the
+    // window was behind another one at the time.
+    boardMap.on('resize', () => {
+      if (!boardFitted && boardMap.getSize().x > 0) {
+        boardFitted = true;
+        boardFit();
+      }
+    });
+    boardPaletteInto(document.getElementById('boardPalette'));
+    for (const id of ['boardWidth', 'boardHeight']) {
+      document.getElementById(id).addEventListener('change', () => {
+        boardDrawSheet();
+        boardFit();
+      });
+    }
+  }
+  boardMap.invalidateSize();     // it was created inside a hidden panel
+  boardDrawSheet();
+  boardFitted = boardMap.getSize().x > 0;
+  boardFit();
+  boardOpened = mapName || null;
+  if (mapName) document.getElementById('boardName').value = mapName;
+  boardNote('Pick a tool and draw. Nothing is downloaded: this is your own map.');
+}
+
+document.getElementById('boardOpen').addEventListener('click', async () => {
+  const name = openedMap && openedMap.mapName;
+  boardOpen(name);
+  // A map that was drawn on a sheet before opens on that sheet again.
+  if (name) {
+    try {
+      const res = await fetch(`/api/design/${encodeURIComponent(name)}`);
+      if (res.ok) {
+        boardLoadDesign(await res.json());
+        boardNote(`${name} as it was drawn. Change it and build it again.`);
+      }
+    } catch { /* a map with no sheet simply opens an empty one */ }
+  }
+});
+
+document.getElementById('boardClose').addEventListener('click', () => {
+  boardStop();
+  document.getElementById('board').hidden = true;
+});
+
+document.getElementById('boardUndo').addEventListener('click', () => {
+  const layers = boardLayer.getLayers();
+  if (!layers.length) return;
+  boardLayer.removeLayer(layers[layers.length - 1]);
+  boardPick(null);
+  boardShowCount();
+  boardNote('Last thing removed.');
+});
+
+document.getElementById('boardClear').addEventListener('click', () => {
+  boardLayer.clearLayers();
+  boardPick(null);
+  boardShowCount();
+  boardNote('Sheet cleared.');
+});
+
+function boardMapName() {
+  const typed = document.getElementById('boardName').value.trim();
+  const clean = typed.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  return clean || `drawn_${Date.now()}`;
+}
+
+document.getElementById('boardSave').addEventListener('click', async () => {
+  const name = boardMapName();
+  document.getElementById('boardName').value = name;
+  try {
+    const res = await fetch(`/api/design/${encodeURIComponent(name)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(boardDesign()),
+    });
+    const out = await res.json();
+    if (!res.ok) throw apiError(out, res);
+    boardOpened = name;
+    boardNote(`Saved as ${name}: ${out.usable} of ${out.saved} will be built.`);
+  } catch (err) {
+    boardNote(err.message);
+  }
+});
+
+document.getElementById('boardBuild').addEventListener('click', async () => {
+  const btn = document.getElementById('boardBuild');
+  const name = boardMapName();
+  document.getElementById('boardName').value = name;
+  const design = boardDesign();
+  if (!design.features.length) {
+    boardNote('There is nothing on the sheet yet.');
+    return;
+  }
+  btn.disabled = true;
+  boardNote('Building…');
+  startProgress(name);
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      // A sheet is already square with the tile grid - that is what drawing
+      // on a grid means - so there is no street angle to find and turning the
+      // map only costs size: a 900 m sheet came out 1200 tiles instead of
+      // 900, because a square turned needs the circle round it. Somebody who
+      // draws their streets at an angle meant them at that angle.
+      body: JSON.stringify({ mapName: name, design,
+                             metersPerTile: readScale(),
+                             settings: { ...readSettings(), align_streets: 0,
+                                         rotate_degrees: 0 } }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    boardNote(`${name} built: ${data.width} × ${data.height} tiles.`);
+    fx.toast('ok', 'Map built', `${name}: ${data.width} × ${data.height} tiles.`);
+    document.getElementById('board').hidden = true;
+    renderResults(data);
+    rememberMap({ mapName: name, bbox: data.bbox || null,
+                  metersPerTile: readScale(), shape: null,
+                  settings: data.settings || readSettings() });
+    loadMaps();
+  } catch (err) {
+    boardNote(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---- zones with settings of their own ---------------------------------------
+//
+// A part of the map, drawn, with a few settings written on it: a town centre
+// that is taller and thick with zombies, an estate all in one brick. Anything
+// outside every zone is built to the map's own settings, and the smallest zone
+// containing a building is the one that answers (knoxbuild/zones.py).
+//
+// Which settings a zone may set comes from the server, like the palette and
+// the knobs themselves: a dial the window offers that the generator does not
+// read is a dial that does nothing.
+const zoneLayer = new L.FeatureGroup().addTo(map);
+let zoneMeta = null;            // {settings: [...], styles: [...]}
+let zoneList = [];              // [{name, ring, settings, wall_style, layer}]
+let zonePicked = -1;
+let zoneDrawer = null;
+
+const ZONE_STYLE = { color: '#8f7ad6', weight: 2, dashArray: '5,4', fillOpacity: 0.12 };
+const ZONE_PICKED = { color: '#c9a8ff', weight: 3, dashArray: null, fillOpacity: 0.25 };
+
+let zonePresets = [];      // the hand-built buildings a zone can draw from
+
+async function loadZoneMeta() {
+  if (zoneMeta) return zoneMeta;
+  try {
+    zoneMeta = await (await fetch('/api/zones')).json();
+  } catch {
+    zoneMeta = { settings: [], styles: [] };
+  }
+  try {
+    zonePresets = (await (await fetch('/api/presets/buildings')).json()).presets || [];
+  } catch {
+    zonePresets = [];
+  }
+  return zoneMeta;
+}
+
+function zoneNote(text) {
+  const box = document.getElementById('zoneNote');
+  if (box) box.textContent = text || '';
+}
+
+function zoneDirty(on) {
+  document.getElementById('zoneSave').disabled = !on;
+}
+
+function showZoneCount() {
+  const badge = document.getElementById('zoneCount');
+  if (badge) badge.textContent = zoneList.length ? `(${zoneList.length})` : '';
+}
+
+// How many of its own settings a zone carries, for the list.
+function zoneSummary(zone) {
+  const n = Object.keys(zone.settings || {}).length;
+  const bits = [];
+  if (zone.presets && zone.presets.length) {
+    bits.push(`${zone.presets.length} hand-built`);
+  }
+  if (zone.wall_style) bits.push(zone.wall_style);
+  bits.push(n ? `${n} setting${n === 1 ? '' : 's'}` : 'nothing set yet');
+  return bits.join(' · ');
+}
+
+function drawZoneList() {
+  const box = document.getElementById('zoneList');
+  box.innerHTML = zoneList.map((z, i) => `<li data-i="${i}" class="${i === zonePicked ? 'on' : ''}">
+      <span>${escapeHtml(z.name || 'Zone ' + (i + 1))}</span>
+      <span class="zone-what">${escapeHtml(zoneSummary(z))}</span>
+      <button type="button" data-drop="${i}">Remove</button></li>`).join('');
+  showZoneCount();
+}
+
+function zonePick(i) {
+  zonePicked = i;
+  for (const z of zoneList) if (z.layer) z.layer.setStyle(ZONE_STYLE);
+  const zone = zoneList[i];
+  if (zone && zone.layer) zone.layer.setStyle(ZONE_PICKED);
+  drawZoneList();
+  drawZoneEditor();
+}
+
+function drawZoneEditor() {
+  const box = document.getElementById('zoneEditor');
+  const zone = zoneList[zonePicked];
+  if (!zone || !zoneMeta) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  const styles = ['<option value="">(whatever the map uses)</option>'].concat(
+    zoneMeta.styles.map(s =>
+      `<option value="${s}"${s === zone.wall_style ? ' selected' : ''}>${escapeHtml(s)}</option>`));
+  // Hand-built buildings this zone stamps instead of generated ones. A plot
+  // nothing fits still gets a generated building, so ticking one is never a
+  // way to end up with a hole in the town.
+  const chosen = new Set(zone.presets || []);
+  const presetBox = zonePresets.length
+    ? `<p class="hint">Hand-built buildings to use here. A plot none of them
+         fits gets a generated building as usual.</p>
+       ${zonePresets.map(p => `<label class="zone-preset">
+         <input type="checkbox" data-building-preset="${escapeHtml(p.name)}"
+           ${chosen.has(p.name) ? 'checked' : ''}>
+         <span>${escapeHtml(p.name)}</span>
+         <small>${p.width}×${p.height}, ${p.storeys} storey${p.storeys === 1 ? '' : 's'}</small>
+       </label>`).join('')}`
+    : `<p class="hint">No hand-built buildings yet. Put a BuildingEd
+         <code>.tbx</code> in <code>presets/buildings</code> beside KnoxMap and
+         it can be used here.</p>`;
+  box.innerHTML = `
+    <label><span>Name</span>
+      <input type="text" id="zoneName" value="${escapeHtml(zone.name || '')}"></label>
+    <label><span>Walls</span><select id="zoneStyle">${styles.join('')}</select></label>
+    ${presetBox}
+    <p class="hint">Leave a box empty and the map's own setting is used there.</p>
+    ${zoneMeta.settings.map(s => `<label><span>${escapeHtml(SETTING_LABELS[s.id]
+        ? SETTING_LABELS[s.id][0] : s.id)}</span>
+      <input type="number" data-zone-key="${s.id}" min="${s.min}" max="${s.max}"
+        step="${s.int ? 1 : 0.05}" placeholder="${s.default}"
+        class="${zone.settings[s.id] !== undefined ? 'zone-set' : ''}"
+        value="${zone.settings[s.id] !== undefined ? zone.settings[s.id] : ''}"></label>`).join('')}`;
+
+  document.getElementById('zoneName').addEventListener('input', ev => {
+    zone.name = ev.target.value; zoneDirty(true); drawZoneList();
+  });
+  document.getElementById('zoneStyle').addEventListener('change', ev => {
+    zone.wall_style = ev.target.value || undefined;
+    zoneDirty(true); drawZoneList();
+  });
+  for (const tick of box.querySelectorAll('[data-building-preset]')) {
+    tick.addEventListener('change', ev => {
+      const name = ev.target.dataset.buildingPreset;
+      const have = new Set(zone.presets || []);
+      if (ev.target.checked) have.add(name); else have.delete(name);
+      zone.presets = [...have];
+      if (!zone.presets.length) delete zone.presets;
+      zoneDirty(true);
+      drawZoneList();
+    });
+  }
+  for (const input of box.querySelectorAll('[data-zone-key]')) {
+    input.addEventListener('input', ev => {
+      const key = ev.target.dataset.zoneKey;
+      if (ev.target.value.trim() === '') delete zone.settings[key];
+      else zone.settings[key] = parseFloat(ev.target.value);
+      ev.target.classList.toggle('zone-set', zone.settings[key] !== undefined);
+      zoneDirty(true);
+      drawZoneList();
+    });
+  }
+}
+
+function addZoneLayer(zone) {
+  const layer = L.polygon(zone.ring.map(([lon, lat]) => [lat, lon]), ZONE_STYLE);
+  layer.on('click', ev => { L.DomEvent.stop(ev); zonePick(zoneList.indexOf(zone)); });
+  zoneLayer.addLayer(layer);
+  zone.layer = layer;
+}
+
+async function loadZones(mapName) {
+  await loadZoneMeta();
+  zoneLayer.clearLayers();
+  zoneList = [];
+  zonePicked = -1;
+  if (mapName) {
+    try {
+      const data = await (await fetch(`/api/zones/${encodeURIComponent(mapName)}`)).json();
+      for (const z of data.zones || []) {
+        const zone = { name: z.name, ring: z.ring, settings: z.settings || {},
+                       wall_style: z.wall_style, presets: z.presets };
+        zoneList.push(zone);
+        addZoneLayer(zone);
+      }
+    } catch { /* a map with no zones simply has none */ }
+  }
+  zoneDirty(false);
+  drawZoneList();
+  drawZoneEditor();
+}
+
+document.getElementById('zoneDraw').addEventListener('click', () => {
+  loadZoneMeta().then(() => {
+    if (zoneDrawer) zoneDrawer.disable();
+    zoneDrawer = new L.Draw.Polygon(map, {
+      allowIntersection: false, shapeOptions: ZONE_STYLE });
+    zoneDrawer.enable();
+    zoneDrawing = true;
+    zoneNote('Draw round the part of the map this zone covers; double-click to finish.');
+  });
+});
+
+// Whichever of the three is armed owns the shape that comes back; this is the
+// third, so it is checked before the area selection falls through to it.
+let zoneDrawing = false;
+
+function zoneTookShape(layer) {
+  if (!zoneDrawing) return false;
+  zoneDrawing = false;
+  zoneDrawer = null;
+  const ring = layer.toGeoJSON().geometry.coordinates[0]
+    .map(([lon, lat]) => [lon, lat]);
+  const zone = { name: `Zone ${zoneList.length + 1}`, ring, settings: {} };
+  zoneList.push(zone);
+  addZoneLayer(zone);
+  zonePick(zoneList.length - 1);
+  zoneDirty(true);
+  zoneNote('Zone drawn. Set what is different about it, then save.');
+  return true;
+}
+
+document.getElementById('zoneList').addEventListener('click', ev => {
+  const drop = ev.target.closest('[data-drop]');
+  if (drop) {
+    const i = parseInt(drop.dataset.drop, 10);
+    if (zoneList[i].layer) zoneLayer.removeLayer(zoneList[i].layer);
+    zoneList.splice(i, 1);
+    zonePicked = -1;
+    zoneDirty(true);
+    drawZoneList();
+    drawZoneEditor();
+    return;
+  }
+  const row = ev.target.closest('li[data-i]');
+  if (row) zonePick(parseInt(row.dataset.i, 10));
+});
+
+document.getElementById('zoneSave').addEventListener('click', async () => {
+  if (!openedMap) {
+    zoneNote('Open or generate a map first: zones are saved beside one.');
+    return;
+  }
+  try {
+    const res = await fetch(`/api/zones/${encodeURIComponent(openedMap.mapName)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zones: zoneList.map(z => ({
+        name: z.name, ring: z.ring, settings: z.settings,
+        wall_style: z.wall_style, presets: z.presets })) }),
+    });
+    const out = await res.json();
+    if (!res.ok) throw apiError(out, res);
+    zoneDirty(false);
+    zoneNote(`${out.saved} zone${out.saved === 1 ? '' : 's'} saved. `
+      + 'Generate buildings again to build them in.');
+    fx.toast('ok', 'Zones saved',
+             `${openedMap.mapName}: build the buildings again to see them.`);
+  } catch (err) {
+    zoneNote(err.message);
+  }
+});
+
+loadZoneMeta();
+
+// ---- the building editor ----------------------------------------------------
+//
+// One building, drawn room by room on its own screen, and used by the
+// generator wherever the map has a building of that kind: a police station
+// somebody built is the police station on the map, not an arrangement of
+// offices that happens to be called one (knoxbuild/designer.py).
+//
+// The drawing lives here and the geometry lives on the server: rooms may not
+// overlap, which is a rule the rest of the pipeline is built on, so every
+// change is sent whole and comes back cleaned up with a picture of what it
+// really builds - the doors, the windows and the furniture included.
+let bdMeta = null;              // {kinds, rooms, styles, limits, presets, use}
+const bdMetaFor = {};           // the rooms and styles of each kind, once asked
+let bdDesign = null;            // what is drawn
+let bdLevel = 0;                // the storey being drawn
+let bdRoom = '';                // the picked room ('' is the eraser)
+let bdHistory = [];
+let bdBusy = false;
+
+function bdNote(text) {
+  const box = document.getElementById('bdNote');
+  if (box) box.textContent = text || '';
+}
+
+function bdApiError(data, res) {
+  return apiError(data, res);
+}
+
+async function bdLoad(kind) {
+  const key = kind || '';
+  if (!bdMetaFor[key]) {
+    const res = await fetch(`/api/builder?kind=${encodeURIComponent(key)}`);
+    bdMetaFor[key] = await res.json();
+  }
+  bdMeta = bdMetaFor[key];
+  return bdMeta;
+}
+
+// ---- the panel: which kinds are built from presets, and what there is ------
+
+function bdPresetKind(entry) {
+  const kinds = (bdMeta && bdMeta.kinds) || [];
+  const found = kinds.find(k => k.id === entry.kind);
+  return found ? found.label : 'Any building';
+}
+
+function drawBuiltList() {
+  const box = document.getElementById('builtList');
+  if (!box || !bdMeta) return;
+  const presets = bdMeta.presets || [];
+  box.innerHTML = presets.map(p => `<li>
+      <span>${escapeHtml(p.name)}</span>
+      <span class="zone-what">${p.width}×${p.height}, ${p.storeys} storey${p.storeys === 1 ? '' : 's'}
+        · ${escapeHtml(bdPresetKind(p))}</span>
+      ${p.editable ? `<button type="button" data-open-built="${escapeHtml(p.name)}">Open</button>` : ''}
+      <button type="button" data-drop-built="${escapeHtml(p.name)}">Remove</button></li>`).join('');
+  const badge = document.getElementById('builtCount');
+  if (badge) badge.textContent = presets.length ? `(${presets.length})` : '';
+}
+
+function drawBuiltKinds() {
+  const box = document.getElementById('builtKinds');
+  if (!box || !bdMeta) return;
+  const on = new Set(bdMeta.use || []);
+  const have = {};
+  for (const p of bdMeta.presets || []) {
+    have[p.kind || ''] = (have[p.kind || ''] || 0) + 1;
+  }
+  box.innerHTML = (bdMeta.kinds || []).map(k => `<button type="button"
+      class="sketch-pick ${on.has(k.id) ? 'on' : ''}" data-use-kind="${k.id}"
+      title="${have[k.id] ? have[k.id] + ' hand-built' : 'nothing hand-built for this yet'}">
+      ${escapeHtml(k.label)}${have[k.id] ? ` (${have[k.id]})` : ''}</button>`).join('');
+}
+
+async function refreshBuilt() {
+  try {
+    bdMetaFor[''] = await (await fetch('/api/builder?kind=')).json();
+    bdMeta = bdMetaFor[''];
+  } catch {
+    return;                       // the panel simply stays as it was
+  }
+  drawBuiltKinds();
+  drawBuiltList();
+}
+
+document.getElementById('builtKinds').addEventListener('click', async ev => {
+  const btn = ev.target.closest('[data-use-kind]');
+  if (!btn) return;
+  const kind = btn.dataset.useKind;
+  const on = !btn.classList.contains('on');
+  try {
+    const res = await fetch('/api/builder/use', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, on }) });
+    const out = await res.json();
+    if (!res.ok) throw bdApiError(out, res);
+    for (const cached of Object.values(bdMetaFor)) cached.use = out.use;
+    drawBuiltKinds();
+    const found = (bdMeta.kinds || []).find(k => k.id === kind);
+    const name = found ? found.label : kind;
+    document.getElementById('builtNote').textContent = on
+      ? `${name}: the hand-built one is used. Generate buildings again to see it.`
+      : `${name}: back to buildings the generator lays out.`;
+  } catch (err) {
+    document.getElementById('builtNote').textContent = err.message;
+  }
+});
+
+document.getElementById('builtList').addEventListener('click', async ev => {
+  const open = ev.target.closest('[data-open-built]');
+  if (open) {
+    builderOpen();
+    await bdOpenSaved(open.dataset.openBuilt);
+    return;
+  }
+  const drop = ev.target.closest('[data-drop-built]');
+  if (!drop) return;
+  const name = drop.dataset.dropBuilt;
+  try {
+    const res = await fetch(`/api/presets/buildings/${encodeURIComponent(name)}`,
+                            { method: 'DELETE' });
+    if (!res.ok) throw bdApiError(await res.json(), res);
+    await refreshBuilt();
+    document.getElementById('builtNote').textContent = `"${name}" removed.`;
+  } catch (err) {
+    document.getElementById('builtNote').textContent = err.message;
+  }
+});
+
+// ---- the editor itself -----------------------------------------------------
+
+function bdRoomsMarkup() {
+  const groups = [];
+  for (const entry of (bdMeta && bdMeta.rooms) || []) {
+    const last = groups[groups.length - 1];
+    if (!last || last.name !== entry.group) {
+      groups.push({ name: entry.group, items: [entry] });
+    } else {
+      last.items.push(entry);
+    }
+  }
+  const eraser = `<div class="palette-group">
+      <span class="palette-head">The eraser</span>
+      <button type="button" class="sketch-pick ${bdRoom === '' ? 'on' : ''}"
+        data-room="" title="Takes what is under it out of the building">
+        <span class="swatch" style="background:#e8e7e2"></span>
+        Nothing - cut it away</button></div>`;
+  return eraser + groups.map(g => `<div class="palette-group">
+      <span class="palette-head">${escapeHtml(g.name)}</span>
+      ${g.items.map(e => `<button type="button"
+        class="sketch-pick ${e.id === bdRoom ? 'on' : ''}" data-room="${e.id}"
+        title="${escapeHtml(e.id)}">
+        <span class="swatch" style="background:${e.colour}"></span>
+        ${escapeHtml(e.label)}</button>`).join('')}
+    </div>`).join('');
+}
+
+function drawBdRooms() {
+  const box = document.getElementById('bdRooms');
+  if (box) box.innerHTML = bdRoomsMarkup();
+}
+
+function drawBdStoreys() {
+  const box = document.getElementById('bdStoreyTabs');
+  if (!box || !bdDesign) return;
+  const names = [];
+  for (let i = 0; i < bdDesign.storeys; i += 1) {
+    names.push(`<button type="button" class="sketch-pick ${i === bdLevel ? 'on' : ''}"
+      data-storey="${i}">${i === 0 ? 'Ground floor' : 'Floor ' + i}</button>`);
+  }
+  box.innerHTML = names.join('');
+}
+
+function bdFields() {
+  if (!bdDesign) return;
+  document.getElementById('bdName').value = bdDesign.name || '';
+  document.getElementById('bdWidth').value = bdDesign.width;
+  document.getElementById('bdHeight').value = bdDesign.height;
+  document.getElementById('bdStoreys').value = bdDesign.storeys;
+  const kinds = (bdMeta && bdMeta.kinds) || [];
+  document.getElementById('bdKind').innerHTML =
+    ['<option value="">Any building</option>'].concat(kinds.map(k =>
+      `<option value="${k.id}"${k.id === bdDesign.kind ? ' selected' : ''}>${escapeHtml(k.label)}</option>`)).join('');
+  const styles = (bdMeta && bdMeta.styles) || [];
+  document.getElementById('bdStyle').innerHTML =
+    ['<option value="">Whatever suits it</option>'].concat(styles.map(s =>
+      `<option value="${s}"${s === bdDesign.style ? ' selected' : ''}>${escapeHtml(s)}</option>`)).join('');
+}
+
+// What the picture is drawn at, so a drag can be read back in tiles however
+// the picture is scaled to fit the screen.
+function bdTileAt(ev) {
+  const img = document.getElementById('bdImage');
+  const box = img.getBoundingClientRect();
+  if (!box.width || !box.height || !bdDesign) return null;
+  const x = Math.floor((ev.clientX - box.left) / box.width * bdDesign.width);
+  const y = Math.floor((ev.clientY - box.top) / box.height * bdDesign.height);
+  return { x: Math.min(Math.max(x, 0), bdDesign.width - 1),
+           y: Math.min(Math.max(y, 0), bdDesign.height - 1) };
+}
+
+function bdShow(data) {
+  bdDesign = data.design;
+  bdLevel = data.level;
+  const img = document.getElementById('bdImage');
+  img.hidden = !data.image;
+  if (data.image) img.src = data.image;
+  document.getElementById('bdEmpty').hidden = data.painted > 0;
+  document.getElementById('bdUndo').disabled = !bdHistory.length;
+  drawBdStoreys();
+  bdFields();
+
+  const tally = document.getElementById('bdTally');
+  tally.innerHTML = (data.tally || []).map(t => `<li>
+      <span class="swatch" style="background:${t.colour}"></span>
+      ${escapeHtml(t.label)}<span class="how-much">${t.tiles} tiles</span></li>`).join('')
+    || '<li class="hint">Nothing drawn on this floor yet.</li>';
+  const tiles = document.getElementById('bdTiles');
+  tiles.innerHTML = (data.tiles || []).map(t => `<li>
+      <b>${escapeHtml(t.what)}</b>
+      ${t.tiles && t.tiles.length ? `<br><code>${escapeHtml(t.tiles.join(', '))}</code>` : ''}
+      ${t.fittings && t.fittings.length
+        ? `<br><span class="hint">${escapeHtml(t.fittings.join(', '))}</span>` : ''}
+      </li>`).join('');
+
+  const b = data.built || {};
+  bdNote(`${b.rooms || 0} rooms, ${b.doors || 0} doorways, ${b.windows || 0} windows, `
+    + `${b.furniture || 0} things in them - as it will be built.`
+    + (data.oneStoreyAtATime
+      ? ' A building this big is drawn a floor at a time; the rest are built when it is saved.'
+      : ''));
+}
+
+async function bdRefresh(design, level) {
+  if (bdBusy) return;
+  bdBusy = true;
+  document.getElementById('bdPlan').style.opacity = '0.6';
+  try {
+    const res = await fetch('/api/builder/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ design: design || bdDesign,
+                             level: level === undefined ? bdLevel : level }) });
+    const out = await res.json();
+    if (!res.ok) throw bdApiError(out, res);
+    bdShow(out);
+  } catch (err) {
+    bdNote(err.message);
+  } finally {
+    bdBusy = false;
+    document.getElementById('bdPlan').style.opacity = '';
+  }
+}
+
+function bdRemember() {
+  bdHistory.push(JSON.stringify(bdDesign));
+  if (bdHistory.length > 40) bdHistory.shift();
+}
+
+function bdDraw(x0, y0, x1, y1) {
+  if (!bdDesign) return;
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  next.rooms.push({ level: bdLevel, x: Math.min(x0, x1), y: Math.min(y0, y1),
+                    w: Math.abs(x1 - x0) + 1, h: Math.abs(y1 - y0) + 1,
+                    kind: bdRoom });
+  bdRefresh(next);
+}
+
+function builderOpen() {
+  document.getElementById('builder').hidden = false;
+}
+
+async function bdStart() {
+  await bdLoad('');
+  if (!bdDesign) {
+    bdDesign = { name: '', kind: '', style: '', width: 20, height: 16,
+                 storeys: 1, rooms: [] };
+    bdHistory = [];
+  }
+  drawBdRooms();
+  await bdRefresh(bdDesign, 0);
+  bdNote('Pick a room, then drag a rectangle on the plan.');
+}
+
+async function bdOpenSaved(name) {
+  try {
+    const res = await fetch(`/api/builder/design/${encodeURIComponent(name)}`);
+    const out = await res.json();
+    if (!res.ok) throw bdApiError(out, res);
+    bdHistory = [];
+    bdShow(out);
+    await bdLoad(out.design.kind || '');
+    drawBdRooms();
+    bdFields();
+    bdNote(`"${name}" as it was drawn. Change it and save it again.`);
+  } catch (err) {
+    bdNote(err.message);
+  }
+}
+
+document.getElementById('builderOpen').addEventListener('click', () => {
+  builderOpen();
+  bdStart();
+});
+
+document.getElementById('bdClose').addEventListener('click', () => {
+  document.getElementById('builder').hidden = true;
+  refreshBuilt();
+});
+
+document.getElementById('bdRooms').addEventListener('click', ev => {
+  const btn = ev.target.closest('[data-room]');
+  if (!btn) return;
+  bdRoom = btn.dataset.room;
+  drawBdRooms();
+  bdNote(bdRoom ? `Drag on the plan to draw a ${btn.textContent.trim()}.`
+                : 'Drag on the plan to cut that part out of the building.');
+});
+
+document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
+  const btn = ev.target.closest('[data-storey]');
+  if (btn) bdRefresh(bdDesign, parseInt(btn.dataset.storey, 10));
+});
+
+// Dragging a rectangle on the plan. The outline follows the pointer as a box
+// over the picture; the room itself is only drawn when the drag is let go,
+// because every change is a round trip to have the geometry worked out.
+(() => {
+  const plan = document.getElementById('bdPlan');
+  const ghost = document.getElementById('bdDrag');
+  let from = null;
+
+  function place(a, b) {
+    const img = document.getElementById('bdImage');
+    const box = img.getBoundingClientRect();
+    const plot = plan.getBoundingClientRect();
+    const tw = box.width / bdDesign.width;
+    const th = box.height / bdDesign.height;
+    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+    ghost.hidden = false;
+    ghost.style.left = `${box.left - plot.left + x0 * tw}px`;
+    ghost.style.top = `${box.top - plot.top + y0 * th}px`;
+    ghost.style.width = `${(Math.abs(b.x - a.x) + 1) * tw}px`;
+    ghost.style.height = `${(Math.abs(b.y - a.y) + 1) * th}px`;
+  }
+
+  plan.addEventListener('pointerdown', ev => {
+    if (!bdDesign || bdBusy) return;
+    from = bdTileAt(ev);
+    if (!from) return;
+    ev.preventDefault();          // dragging the picture itself, otherwise
+    place(from, from);
+  });
+  // The rest of the drag is watched on the window rather than on the plan:
+  // letting go past the edge of the picture is how anyone draws a room that
+  // reaches the wall, and on the plan alone that release never arrived - the
+  // room was never drawn and the outline stayed on the screen.
+  window.addEventListener('pointermove', ev => {
+    if (!from) return;
+    const now = bdTileAt(ev);
+    if (now) place(from, now);
+  });
+  window.addEventListener('pointerup', ev => {
+    if (!from) return;
+    const now = bdTileAt(ev) || from;
+    ghost.hidden = true;
+    const started = from;
+    from = null;
+    bdDraw(started.x, started.y, now.x, now.y);
+  });
+  window.addEventListener('pointercancel', () => { from = null; ghost.hidden = true; });
+})();
+
+for (const id of ['bdWidth', 'bdHeight', 'bdStoreys']) {
+  document.getElementById(id).addEventListener('change', () => {
+    if (!bdDesign) return;
+    bdRemember();
+    const next = JSON.parse(JSON.stringify(bdDesign));
+    next.width = parseInt(document.getElementById('bdWidth').value, 10) || next.width;
+    next.height = parseInt(document.getElementById('bdHeight').value, 10) || next.height;
+    next.storeys = parseInt(document.getElementById('bdStoreys').value, 10) || 1;
+    bdRefresh(next, Math.min(bdLevel, next.storeys - 1));
+  });
+}
+
+document.getElementById('bdName').addEventListener('input', ev => {
+  if (bdDesign) bdDesign.name = ev.target.value;
+});
+
+document.getElementById('bdKind').addEventListener('change', async ev => {
+  if (!bdDesign) return;
+  bdDesign.kind = ev.target.value;
+  // The rooms offered and the walls available both depend on what is being
+  // built, so both are asked for again.
+  await bdLoad(bdDesign.kind);
+  if (bdRoom && !(bdMeta.rooms || []).some(r => r.id === bdRoom)) bdRoom = '';
+  drawBdRooms();
+  bdRefresh(bdDesign);
+});
+
+document.getElementById('bdStyle').addEventListener('change', ev => {
+  if (!bdDesign) return;
+  bdDesign.style = ev.target.value;
+  bdRefresh(bdDesign);
+});
+
+document.getElementById('bdFill').addEventListener('click', async () => {
+  if (!bdDesign || bdBusy) return;
+  bdRemember();
+  bdBusy = true;
+  bdNote('Laying it out...');
+  try {
+    const res = await fetch('/api/builder/autofill', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ design: bdDesign, level: bdLevel }) });
+    const out = await res.json();
+    if (!res.ok) throw bdApiError(out, res);
+    bdShow(out);
+    bdNote('Laid out as the generator would have. Change whatever you like.');
+  } catch (err) {
+    bdNote(err.message);
+  } finally {
+    bdBusy = false;
+  }
+});
+
+document.getElementById('bdUndo').addEventListener('click', () => {
+  const was = bdHistory.pop();
+  if (!was) return;
+  bdRefresh(JSON.parse(was));
+});
+
+document.getElementById('bdClear').addEventListener('click', () => {
+  if (!bdDesign) return;
+  bdRemember();
+  bdRefresh({ ...bdDesign, rooms: bdDesign.rooms.filter(r => r.level !== bdLevel) });
+  bdNote('This floor cleared.');
+});
+
+document.getElementById('bdSave').addEventListener('click', async () => {
+  if (!bdDesign) return;
+  const name = document.getElementById('bdName').value.trim();
+  if (!name) { bdNote('Give the building a name first.'); return; }
+  try {
+    const res = await fetch('/api/builder/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, design: { ...bdDesign, name } }) });
+    const out = await res.json();
+    if (!res.ok) throw bdApiError(out, res);
+    for (const cached of Object.values(bdMetaFor)) cached.presets = out.presets;
+    drawBuiltKinds();
+    drawBuiltList();
+    const kept = out.saved;
+    bdNote(`Saved as "${kept.name}": ${kept.width}×${kept.height}, `
+      + `${kept.storeys} storey${kept.storeys === 1 ? '' : 's'}. `
+      + (bdDesign.kind
+        ? 'Switch its kind on in "Hand-built buildings" to have it used.'
+        : 'It can stand in for any building a zone draws from.'));
+    fx.toast('ok', 'Building saved', `${kept.name} is ready to be used.`);
+  } catch (err) {
+    bdNote(err.message);
+    fx.toast('bad', 'Not saved', err.message);
+  }
+});
+
+refreshBuilt();

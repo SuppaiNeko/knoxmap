@@ -38,7 +38,7 @@ class EntrancePointMapping(unittest.TestCase):
             path = f"{directory}/building.tbx"
             job = (4, 4, 1, False, 1, "hospital", None, None, None, "hospital",
                      path, None, False, [], False, entrances, profile, [],
-                     False, party)
+                     False, None, party)
             with mock.patch.object(build, "build_building", return_value=plan) as make, \
                     mock.patch.object(build, "render_tbx", return_value="tbx"):
                 result = build._make_one(job)

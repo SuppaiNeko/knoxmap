@@ -124,7 +124,8 @@ def _soften(grid: np.ndarray) -> np.ndarray:
 
 def build_spawn_map(buildings: list[tuple[int, int, np.ndarray, int, str]],
                     map_w: int, map_h: int, metres_per_tile: float,
-                    landscape_path: str | None, settings) -> tuple[Image.Image, dict]:
+                    landscape_path: str | None, settings,
+                    zoning=None) -> tuple[Image.Image, dict]:
     """Spawn map image and a summary, from placed buildings.
 
     `buildings` holds (x0, y0, mask, levels, kind) in tiles.
@@ -161,8 +162,18 @@ def build_spawn_map(buildings: list[tuple[int, int, np.ndarray, int, str]],
         # No zombies standing in rivers and lakes.
         density[water > 0.5] = 0.0
 
-    value = density * VALUE_PER_PERSON * settings.zombies_per_resident
+    # How many zombies each person becomes, and the most one chunk may hold -
+    # both per chunk, because a zone may say something different about its own
+    # part of the map. Outside every zone these are the map's own numbers
+    # repeated, so a map with no zones gets exactly what it always did.
+    per_resident = settings.zombies_per_resident
     cap = settings.spawn_density
+    if zoning is not None and len(zoning):
+        dials = zoning.chunk_values(("zombies_per_resident", "spawn_density"),
+                                    gw, gh, CHUNK)
+        per_resident = dials["zombies_per_resident"]
+        cap = dials["spawn_density"]
+    value = density * VALUE_PER_PERSON * per_resident
     # Round at random in proportion to the fraction, so a quiet street worth
     # 0.3 of a zombie still gets one now and then instead of never.
     rng = np.random.default_rng(settings.seed)
@@ -179,12 +190,12 @@ def build_spawn_map(buildings: list[tuple[int, int, np.ndarray, int, str]],
         "people": int(round(residents_total + daytime_total + street_total)),
         "zombies_per_resident": settings.zombies_per_resident,
         "m2_per_person": settings.m2_per_person,
-        "horde_cap": cap,
+        "horde_cap": settings.spawn_density,
         "chunks": int(value.size),
         "chunks_with_zombies": populated,
         "share_with_zombies": round(populated / value.size, 4) if value.size else 0,
         "peak_value": int(value.max()) if value.size else 0,
-        "chunks_at_cap": int((value >= cap).sum()) if cap else 0,
+        "chunks_at_cap": int((value >= cap).sum()),
         "spawn_total": int(value.sum()),
         # A person-for-zombie reading of the dial, for the page. The game
         # scales the real number again with its Zombie Population setting.

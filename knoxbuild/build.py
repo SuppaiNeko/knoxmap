@@ -13,6 +13,7 @@ landscape BMP exactly, generates a floor plan for each, and writes:
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 import json
 import math
@@ -536,6 +537,66 @@ MORE_INSIDE = {
 BLOCK_SHARE = 55
 
 
+def _wall_pool(kind: str | None) -> list[dict]:
+    """The styles a building of this kind is really built in, or none.
+
+    A kind that borrows another's walls - a police station is built of what a
+    civic building is built of - is asked about under the kind it borrows
+    from, which is what pick_style does; a kind with no walls of its own at
+    all has none, rather than raising.
+    """
+    from . import catalog as C
+
+    kind = BORROWED_STYLE.get(kind or "", kind)
+    if not kind or kind not in C.SPECIAL_STYLES:
+        return []
+    return wall_variants(kind)
+
+
+def style_names(kind: str | None = None) -> list[str]:
+    """Every wall style a zone may pin its buildings to, by name."""
+    from . import catalog as C
+
+    names = [style["name"] for style in C.HOUSE_STYLES]
+    names += [v["name"] for v in _wall_pool(kind) if v.get("name")]
+    seen, out = set(), []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def style_named(name: str, kind: str | None) -> dict | None:
+    """The style of that name for this kind of building, or None.
+
+    A kind with walls of its own is asked first, so pinning "brick" on a
+    church gets the church's brick rather than a house's; a name nothing
+    answers to gets None, and the caller keeps the style it had.
+    """
+    from . import catalog as C
+
+    wanted = (name or "").strip().lower()
+    if not wanted:
+        return None
+    pools = []
+    own = _wall_pool(kind)
+    if own:
+        pools.append(own)
+    pools.append(C.HOUSE_STYLES)
+    for pool in pools:
+        for style in pool:
+            if (style.get("name") or "").lower() == wanted:
+                return style
+    # "brick" against a church's "church_brick", which is what a mapper
+    # pinning a style by its plain name means.
+    for pool in pools:
+        for style in pool:
+            if wanted in (style.get("name") or "").lower().split("_"):
+                return style
+    return None
+
+
 def wall_variants(kind: str) -> list[dict]:
     """Every style a building of this kind may be built in."""
     from . import catalog as C
@@ -891,6 +952,31 @@ def _road_weight(out_dir: str, map_name: str, proj,
     return weight
 
 
+def _drawn_features(out_dir: str, map_name: str) -> list:
+    """What was drawn by hand for this map, as OSM features.
+
+    The sheet from the drawing board, if there is one, and whatever was drawn
+    over the world map. Both are stored as drawn so they can be drawn on
+    again, and converted here the same way the generator converts them.
+    """
+    from generator import sketch
+
+    # The sheet first, and only the sheet where there is one: building from a
+    # sheet writes the drawing it becomes out as well, so reading both counted
+    # every drawn thing twice - one petrol station came out as two.
+    for name, convert in ((f"{map_name}_design.json", sketch.design_to_drawn),
+                          (f"{map_name}_sketch.geojson", lambda d: d)):
+        path = os.path.join(out_dir, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                return sketch.features(convert(json.load(f)))
+        except (OSError, ValueError):
+            continue
+    return []
+
+
 def _points_of_use(out_dir: str, info: dict, map_name: str, proj) -> dict:
     """Point features from OSM, bucketed by tile for nearby-footprint lookup."""
     from generator import osm
@@ -899,6 +985,11 @@ def _points_of_use(out_dir: str, info: dict, map_name: str, proj) -> dict:
     wanted = tuple(info["osm_bbox"]) if info.get("osm_bbox") else         (bbox.get("south"), bbox.get("west"), bbox.get("north"), bbox.get("east"))
     grid: dict = {}
     feats = osm.load_cache(cache, wanted) or []
+    # Points drawn by hand count too. They are kept beside the map rather than
+    # in the download (app.py, _save_sketch), so reading only the cache left a
+    # petrol station somebody placed themselves with no forecourt and no
+    # pumps: "0 pumps at 0 stations, 0 canopies and 0 points".
+    feats = feats + _drawn_features(out_dir, map_name)
     if info.get("straight_roads") and feats:
         # Where the renderer moved them to, with the roads straightened.
         from generator.octilinear import straighten_roads
@@ -1046,7 +1137,24 @@ def _make_one(job: tuple) -> tuple:
     furniture, error): a building that cannot be laid out is left out with the
     reason, instead of stopping the other two thousand."""
     (w, h, levels, commercial, seed, kind, mask, settings, style, label, path, street, retail,
-        uses, hotel, entrances, profile, mapped, garage_door, party) = job
+        uses, hotel, entrances, profile, mapped, garage_door, preset_file,
+        party) = job
+    if preset_file:
+        # A building somebody built by hand, used as it was built. Nothing is
+        # re-rendered and nothing is stretched: the file that was saved is the
+        # file that is written, which is the whole point of hand-building one.
+        try:
+            with open(preset_file, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as exc:
+            return (0, 0, 0, f"{os.path.basename(path)}: the preset "
+                             f"{os.path.basename(preset_file)} could not be "
+                             f"read ({exc})", [])
+        from . import presets as P
+        about = P.measure(text) or {"storeys": 1, "rooms": 0}
+        return (about["storeys"], about["rooms"], 0, None, [])
     try:
         plan = build_building(w, h, levels=levels, commercial=commercial, seed=seed,
                               kind=kind, mask=mask, settings=settings, street=street,
@@ -1386,6 +1494,29 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         for neg_area, idx, points in deferred_large:
             yield neg_area, idx, points, True
 
+    # Zones the mapper drew, each with its own settings. Asked per building
+    # and per chunk of the spawn map; outside every zone the map's own
+    # settings answer, and the same object comes back (knoxbuild/zones.py).
+    from .zones import Zoning
+    zoning = Zoning.load(out_dir, map_name, proj, settings)
+    if len(zoning):
+        print(f"zones                 : {len(zoning)} drawn by hand")
+    # Hand-built buildings stamped instead of generated ones: the ones a zone
+    # names, and the kinds of building that are switched on for the whole map
+    # - turn "police" on and a police station is the one that was built by
+    # hand (knoxbuild/presets.py). Read once, and only when something asks.
+    import knoxpaths
+    from . import presets as P
+    preset_kinds = P.using(knoxpaths.BASE_DIR)
+    preset_library = (P.library(knoxpaths.BASE_DIR)
+                      if zoning.any_presets() or preset_kinds else [])
+    if preset_library:
+        print(f"presets               : {len(preset_library)} hand-built "
+              f"buildings to draw from")
+        if preset_kinds:
+            print(f"presets for           : {', '.join(sorted(preset_kinds))}")
+    used_presets = collections.Counter()
+
     for placed_so_far, (_neg_area, i, px, retry) in enumerate(candidates()):
         # Between buildings: nothing is written to disk until the whole run
         # is laid out, so stopping here costs only the time spent.
@@ -1432,6 +1563,10 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         btag = (tags.get("building") or "").strip().lower()
         cx = x0 + w / 2
         cy = y0 + h / 2
+        # From here down this building is built to its zone's settings rather
+        # than the map's: how tall it may be, whether it is flats, how big its
+        # rooms are, whose tiles it is built from.
+        here = zoning.settings_at(cx, cy)
         real_m2 = fp.tiles * metres_per_tile * metres_per_tile
         special = classify_building(tags)
         # What is really in it: its own tags and the shops, restaurants and
@@ -1457,7 +1592,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             special = "shed"
             sheds += 1
         nearby = (context.neighbour_levels(cx, cy)
-                  if levels_from_tags(tags, settings) is None else None)
+                  if levels_from_tags(tags, here) is None else None)
         if special is None and nearby is not None and nearby >= 3 \
                 and real_m2 >= NEIGHBOUR_FLATS_M2 and btag not in HOUSE_TAGS:
             # Among tagged blocks of flats, a big untagged building is one more.
@@ -1466,24 +1601,24 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
             around = areas.kind_for(cx, cy, fp.tiles)
             # A tall building in a shopping street is flats over shops; the
             # mapper's height says so more reliably than the zoning does.
-            if around == "shop" and (levels_from_tags(tags, settings) or 0) >= 3:
+            if around == "shop" and (levels_from_tags(tags, here) or 0) >= 3:
                 around = None
             if around:
                 special = around
                 from_area += 1
         commercial = special is not None or tags.get("building") in COMMERCIAL_TAGS
         if special is None and looks_like_apartment(tags, fp.tiles, style_rng,
-                                                    settings):
+                                                    here):
             special = "apartment"
             commercial = True
         levels, measured = building_levels(tags, special, fp.tiles,
-                                           style_rng, settings,
+                                           style_rng, here,
                                            metres_per_tile=metres_per_tile,
                                            region=region)
         if measured:
             from_osm += 1
         elif nearby is not None and (special or "house") in FOLLOWS_NEIGHBOURS:
-            top = settings.max_levels
+            top = here.max_levels
             if special is None:
                 # A Chinese self-built house runs a storey taller than the
                 # game's houses before the neighbours' heights are heard.
@@ -1513,9 +1648,15 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # Hotels are dressed as the city's big buildings, army bases as works,
         # and the public buildings that have no walls of their own as civic.
         style = pick_style(STYLE_AS.get("civic" if hotel else special, special),
-                           x0, y0, style_rng, settings,
+                           x0, y0, style_rng, here,
                            density=local_density, profile=profile,
                            region=region)
+        # A zone may pin its buildings to one set of walls - the estate on the
+        # hill all the same brick - however many styles the rest of the map
+        # has. A name nothing answers to leaves the style it would have had.
+        pinned = zoning.style_at(cx, cy)
+        if pinned:
+            style = style_named(pinned, special) or style
         if profile.wear < 0.18 and style.get("grime"):
             style = dict(style)
             style.pop("grime", None)
@@ -1552,8 +1693,28 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                      name or f"{map_name} building {i}")
             if ("gunstore", "storage") in unit_uses:
                 gunshops.add(fname)
+            # A hand-built building for this plot: one its zone names, or one
+            # built to stand in for this kind of building where that kind is
+            # switched on. The zone is asked first, because a zone is the
+            # mapper saying it about this part of the map in particular.
+            # Chosen from the unit's own seed, so a rebuild puts the same
+            # building back on the same spot.
+            preset_file = None
+            if preset_library:
+                pick = None
+                wanted = set(zoning.presets_at(ux0 + uw / 2, uy0 + uh / 2))
+                if wanted:
+                    pick = P.choose([p for p in preset_library
+                                     if p["name"] in wanted],
+                                    uw, uh, seed + i * 31 + n)
+                elif (special or "house") in preset_kinds:
+                    pick = P.choose_for_kind(preset_library, special or "house",
+                                             uw, uh, seed + i * 31 + n)
+                if pick is not None:
+                    preset_file = pick["file"]
+                    used_presets[pick["name"]] += 1
             jobs.append((uw, uh, levels, commercial, seed + i * 31 + n, special, umask,
-                         settings, style, label, os.path.join(bdir, fname),
+                         here, style, label, os.path.join(bdir, fname),
                          street_side(ux0, uy0, uw, uh),
                          # Shops under flats where the town is built up.
                          context.density(cx, cy) >= RETAIL_DENSITY,
@@ -1561,7 +1722,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                          unit_uses, hotel, entrances_by_unit[n], profile,
                          unit_mapped[n],
                          btag in ("garage", "garages")
-                         or special in ("garage", "fire")))
+                         or special in ("garage", "fire"),
+                         preset_file))
             outline = px if len(units) == 1 else [
                 (ux0, uy0), (ux0 + uw, uy0), (ux0 + uw, uy0 + uh), (ux0, uy0 + uh)]
             decided.append((fname, label, ux0, uy0, uw, uh, unit, outline, special,
@@ -1701,6 +1863,11 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
                                                areas, metres_per_tile,
                                                seed=seed + 5)
 
+    if used_presets:
+        tally = ", ".join(f"{name} x{n}" for name, n in used_presets.most_common(6))
+        print(f"hand-built            : {sum(used_presets.values())} stamped "
+              f"({tally})")
+
     # Five jobs that each read the finished ground and none of which changes
     # it or what another one reads: fences, the zombie spawn map, the paper
     # map, the parking/town zones and the bridges. Mostly numpy and shapely,
@@ -1715,7 +1882,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         # the WorldEd project picks it up unchanged.
         spawn_img, pop = build_spawn_map(
             peopled, proj.width, proj.height, info["meters_per_tile"],
-            os.path.join(out_dir, f"{map_name}.bmp"), settings)
+            os.path.join(out_dir, f"{map_name}.bmp"), settings, zoning)
         spawn_img.save(os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"),
                        format="BMP")
         save_footprints(os.path.join(out_dir, f"{map_name}_footprints.npz"), peopled)

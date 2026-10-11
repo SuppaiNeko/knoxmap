@@ -753,6 +753,15 @@ def _too_big_for_memory(tiles_w: float, tiles_h: float,
 @app.route("/api/generate", methods=["POST"])
 def generate():
     data = _json_body()
+    # A map drawn on the editor's own sheet brings its own size and its own
+    # corner of the world; the box and the features both come out of it, so
+    # there is nothing to draw on the world map and nothing to download.
+    design = data.get("design")
+    if isinstance(design, dict):
+        south, west, north, east = sketch.design_bbox(design)
+        data = {**data, "south": south, "west": west, "north": north,
+                "east": east, "shape": None, "drawnOnly": True,
+                "sketch": sketch.design_to_drawn(design)}
     shape, problem = _clean_shape(data.get("shape"))
     if problem:
         return jsonify({"error": problem}), 400
@@ -856,6 +865,8 @@ def generate():
     # The drawn map, kept beside the real one. The page sends it when there is
     # one; when there is not, whatever was drawn for this map last time is used
     # again, so Generate map twice over does not quietly lose it.
+    if isinstance(design, dict):
+        _save_design(map_dir, design)
     drawn = data.get("sketch")
     if drawn is None:
         drawn = _load_sketch(map_dir)
@@ -1496,6 +1507,292 @@ def api_sketch_palette():
     return jsonify({"palette": sketch.palette(),
                     "categories": {e["id"]: sketch.category_of(e["id"])
                                    for e in sketch.palette()}})
+
+
+def _design_path(map_dir: Path) -> Path:
+    return map_dir / f"{map_dir.name}_design.json"
+
+
+def _load_design(map_dir: Path) -> dict | None:
+    try:
+        with open(_design_path(map_dir), encoding="utf-8") as f:
+            design = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return design if isinstance(design, dict) else None
+
+
+def _save_design(map_dir: Path, design: dict) -> None:
+    path = _design_path(map_dir)
+    try:
+        map_dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.part")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(design, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass          # a map whose sheet cannot be saved still renders
+
+
+@app.route("/api/design/<name>", methods=["GET", "POST"])
+def api_design(name: str):
+    """The editor's own sheet: what was drawn, in metres, and how big it is.
+
+    Kept as drawn rather than as the GeoJSON it becomes, because metres from
+    a corner are what the editor works in and degrees are not - a sheet that
+    came back as longitude could not be drawn on again without guessing at
+    the conversion backwards.
+    """
+    map_dir = _map_dir(name)
+    if map_dir is None:
+        return jsonify({"error": "Bad map name."}), 400
+    if request.method == "GET":
+        design = _load_design(map_dir)
+        if design is None:
+            return jsonify({"error": "That map was not drawn on a sheet."}), 404
+        return jsonify(design)
+    design = _json_body()
+    if not isinstance(design, dict):
+        return jsonify({"error": "Expected a sheet."}), 400
+    _save_design(map_dir, design)
+    south, west, north, east = sketch.design_bbox(design)
+    made = sketch.features(sketch.design_to_drawn(design))
+    return jsonify({"saved": len(design.get("features") or []),
+                    "usable": len(made),
+                    "bbox": {"south": south, "west": west,
+                             "north": north, "east": east}})
+
+
+@app.route("/api/zones")
+def api_zone_settings():
+    """What a zone may say about itself, and the wall styles it may pin to.
+
+    Served rather than written into the page, for the same reason the settings
+    are: a second copy drifts, and a zone setting the window offers that the
+    generator does not read is a dial that does nothing.
+    """
+    from knoxbuild import zones as Z
+    from knoxbuild.build import style_names
+
+    return jsonify({"settings": Z.overridable(), "styles": style_names(),
+                    "styleKey": Z.STYLE_KEY})
+
+
+@app.route("/api/presets/buildings", methods=["GET"])
+def api_building_presets():
+    """Every hand-built building, and which kinds are built from them."""
+    from knoxbuild import presets as P
+
+    return jsonify({"presets": [{k: v for k, v in entry.items() if k != "file"}
+                                for entry in P.library(BASE_DIR)],
+                    "kinds": P.kinds(), "use": sorted(P.using(BASE_DIR))})
+
+
+@app.route("/api/presets/buildings/<name>", methods=["POST", "DELETE"])
+def api_building_preset(name: str):
+    """Keep a building as a preset, or throw one away.
+
+    A preset is a .tbx - the same file the generator writes and BuildingEd
+    reads - so it is kept exactly as it came: the point of a hand-built
+    building is that nothing happens to it.
+    """
+    from knoxbuild import presets as P
+
+    if request.method == "DELETE":
+        return jsonify({"removed": P.remove(BASE_DIR, name)})
+    body = _json_body()
+    text = body.get("tbx") if isinstance(body, dict) else None
+    if not isinstance(text, str) and isinstance(body, dict):
+        # Or by pointing at a building of a map that came out well.
+        map_dir = _map_dir(body.get("mapName") or "")
+        wanted = str(body.get("file") or "")
+        if map_dir is not None and wanted and "/" not in wanted                 and "\\" not in wanted and wanted.endswith(".tbx"):
+            try:
+                with open(map_dir / "buildings" / wanted, encoding="utf-8",
+                          errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                text = None
+    if not isinstance(text, str):
+        return jsonify({"error": "Send the building as 'tbx', or name a map "
+                                 "and one of its .tbx files."}), 400
+    try:
+        about = P.save(BASE_DIR, name, text, kind=body.get("kind") or "")
+    except (ValueError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({k: v for k, v in about.items() if k != "file"})
+
+
+# ---- the building editor ----------------------------------------------------
+#
+# Rooms drawn on a sheet, built into a real .tbx by the generator's own passes
+# (knoxbuild/designer.py). The window holds the drawing and sends it back
+# whole for each change: the geometry - rooms that may not overlap - is worked
+# out in one place, and the picture that comes back is drawn from the finished
+# building rather than from the drawing, so what is on screen is what will be
+# saved.
+
+def _builder_reply(design: dict, level: int = 0) -> dict:
+    import base64
+
+    from knoxbuild import designer as D
+
+    design = D.clean(design)
+    level = min(max(level, 0), design["storeys"] - 1)
+    # A big building takes seconds to lay out whole, which is too long to wait
+    # for after every drag, so only the storey being drawn is built for the
+    # picture. The whole stack is built when it is saved.
+    alone = D.one_storey_at_a_time(design)
+    built = D.stack(design, only=level if alone else None)
+    image = ""
+    if built.storeys:
+        shot = io.BytesIO()
+        D.preview(design, 0 if alone else level,
+                  building=built).save(shot, format="PNG")
+        image = ("data:image/png;base64,"
+                 + base64.b64encode(shot.getvalue()).decode("ascii"))
+    storey = built.storeys[0 if alone else min(level, len(built.storeys) - 1)] \
+        if built.storeys else None
+    return {"design": design, "level": level, "scale": D.scale_for(design),
+            "image": image, "oneStoreyAtATime": alone,
+            "storeys": design["storeys"] if alone else len(built.storeys),
+            "tiles": D.tiles_used(design),
+            "tally": [{"kind": kind, "label": D.room_label(kind),
+                       "tiles": area,
+                       "colour": "#%02x%02x%02x" % D.room_colour(kind)}
+                      for kind, area in D.tally(design, level)],
+            "built": {"rooms": len(storey.rooms) if storey else 0,
+                      "doors": len(storey.doors) if storey else 0,
+                      "windows": len(storey.windows) if storey else 0,
+                      "furniture": len(storey.furniture) if storey else 0},
+            "painted": D.painted(design, level)}
+
+
+@app.route("/api/builder")
+def api_builder():
+    """What can be drawn: the rooms, the kinds of building, the wall styles.
+
+    The rooms are ordered by what is being built, so asking for a police
+    station gets its cells and its gun store first, which is why the kind is
+    a query rather than part of one fixed list.
+    """
+    from knoxbuild import designer as D
+    from knoxbuild import presets as P
+
+    kind = (request.args.get("kind") or "").strip().lower()
+    return jsonify({"kinds": P.kinds(), "rooms": D.room_kinds(kind or None),
+                    "styles": D.style_choices(kind or None),
+                    "use": sorted(P.using(BASE_DIR)),
+                    "limits": {"minSide": D.MIN_SIDE, "maxSide": D.MAX_SIDE,
+                               "maxStoreys": D.MAX_STOREYS},
+                    "presets": [{k: v for k, v in entry.items() if k != "file"}
+                                for entry in P.library(BASE_DIR)]})
+
+
+@app.route("/api/builder/preview", methods=["POST"])
+def api_builder_preview():
+    body = _json_body()
+    try:
+        return jsonify(_builder_reply(body.get("design"),
+                                      int(body.get("level") or 0)))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": f"That design could not be drawn: {exc}"}), 400
+    except Exception as exc:                      # noqa: BLE001 - reported
+        return failed(f"That design could not be built: {exc}", 500, exc)
+
+
+@app.route("/api/builder/autofill", methods=["POST"])
+def api_builder_autofill():
+    """The rooms the generator would have cut, to start from or to change."""
+    from knoxbuild import designer as D
+
+    body = _json_body()
+    try:
+        filled = D.autofill(body.get("design"))
+        return jsonify(_builder_reply(filled, int(body.get("level") or 0)))
+    except Exception as exc:                      # noqa: BLE001 - reported
+        return failed(f"Nothing could be laid out there: {exc}", 500, exc)
+
+
+@app.route("/api/builder/save", methods=["POST"])
+def api_builder_save():
+    """Keep a drawing as a preset: the .tbx, and the drawing beside it."""
+    from knoxbuild import designer as D
+    from knoxbuild import presets as P
+
+    body = _json_body()
+    design = body.get("design")
+    name = body.get("name") or (design or {}).get("name") or ""
+    try:
+        about = D.keep(BASE_DIR, name, design)
+    except (ValueError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:                      # noqa: BLE001 - reported
+        return failed(f"That design could not be saved: {exc}", 500, exc)
+    return jsonify({"saved": {k: v for k, v in about.items() if k != "file"},
+                    "presets": [{k: v for k, v in e.items() if k != "file"}
+                                for e in P.library(BASE_DIR)]})
+
+
+@app.route("/api/builder/design/<name>")
+def api_builder_design(name: str):
+    """A saved drawing, to open and change again."""
+    from knoxbuild import designer as D
+
+    design = D.load_design(BASE_DIR, name)
+    if design is None:
+        return jsonify({"error": "There is no drawing saved for that preset. "
+                                 "It can still be used as it is."}), 404
+    return jsonify(_builder_reply(design, 0))
+
+
+@app.route("/api/builder/use", methods=["POST"])
+def api_builder_use():
+    """Switch hand-built buildings on or off for one kind of building."""
+    from knoxbuild import presets as P
+
+    body = _json_body()
+    try:
+        P.set_use(BASE_DIR, body.get("kind") or "", bool(body.get("on")))
+    except (ValueError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"use": sorted(P.using(BASE_DIR))})
+
+
+@app.route("/api/builder/kind", methods=["POST"])
+def api_builder_kind():
+    """Say what an existing preset stands in for."""
+    from knoxbuild import presets as P
+
+    body = _json_body()
+    try:
+        kind = P.set_kind(BASE_DIR, body.get("name") or "", body.get("kind") or "")
+    except (ValueError, OSError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"kind": kind,
+                    "presets": [{k: v for k, v in e.items() if k != "file"}
+                                for e in P.library(BASE_DIR)]})
+
+
+@app.route("/api/zones/<name>", methods=["GET", "POST"])
+def api_zones(name: str):
+    from knoxbuild import zones as Z
+
+    map_dir = _map_dir(name)
+    if map_dir is None:
+        return jsonify({"error": "Bad map name."}), 400
+    if request.method == "GET":
+        return jsonify({"zones": Z.load(str(map_dir), map_dir.name)})
+    body = _json_body()
+    drawn = body.get("zones") if isinstance(body, dict) else body
+    if not isinstance(drawn, list):
+        return jsonify({"error": "Expected a list of zones."}), 400
+    try:
+        Z.save(str(map_dir), map_dir.name, drawn)
+    except OSError as exc:
+        return failed(f"The zones could not be saved: {exc}", 500, exc)
+    kept = Z.load(str(map_dir), map_dir.name)
+    return jsonify({"zones": kept, "saved": len(kept)})
 
 
 @app.route("/api/sketch/<name>", methods=["GET", "POST"])

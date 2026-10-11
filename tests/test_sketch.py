@@ -26,14 +26,64 @@ SQUARE = [[[0.0, 0.0], [0.001, 0.0], [0.001, 0.001], [0.0, 0.001], [0.0, 0.0]]]
 LINE = [[0.0, 0.0], [0.001, 0.001]]
 
 
+# Tools whose mark on the map is not made by `classify`, and why. These are
+# checked by what they really do instead; anything else that classifies as
+# nothing is drawn on the page and silently absent from the finished map.
+NOT_THROUGH_CLASSIFY = {
+    # The ground is not painted for it: the forecourt and its pumps are laid
+    # out round the point by knoxbuild/pumps.py.
+    "fuel",
+}
+
+
 class Palette(unittest.TestCase):
     def test_every_entry_reaches_the_map(self):
-        lost = [e[0] for e in sketch.PALETTE if sketch.category_of(e[0]) is None]
+        lost = [e[0] for e in sketch.PALETTE
+                if sketch.category_of(e[0]) is None
+                and e[0] not in NOT_THROUGH_CLASSIFY]
         self.assertEqual(lost, [], "drawn, then missing from the finished map")
+
+    def test_the_exceptions_really_are_exceptions(self):
+        # If one of them starts classifying, the excuse above is stale.
+        for entry_id in NOT_THROUGH_CLASSIFY:
+            with self.subTest(entry_id):
+                self.assertIn(entry_id, sketch.BY_ID)
+                self.assertIsNone(sketch.category_of(entry_id))
+
+    def test_a_petrol_station_is_a_point_because_the_pumps_need_one(self):
+        # knoxbuild/build.py finds them among the point features; an outline
+        # tagged this way is a building with no forecourt.
+        self.assertEqual(sketch.BY_ID["fuel"][2], "point")
 
     def test_ids_are_unique(self):
         ids = [e[0] for e in sketch.PALETTE]
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_every_tool_is_under_exactly_one_heading(self):
+        # The window builds its palette from these groups; a tool left out of
+        # them is drawn under "Other", and one named here but since removed
+        # leaves a heading with a gap under it.
+        self.assertEqual([e[0] for e in sketch.PALETTE
+                          if e[0] not in sketch.GROUP_OF], [])
+        self.assertEqual([i for i in sketch.GROUP_OF if i not in sketch.BY_ID], [])
+        listed = [i for _name, ids in sketch.GROUPS for i in ids]
+        self.assertEqual(len(listed), len(set(listed)))
+        self.assertEqual(len(listed), len(sketch.PALETTE))
+
+    def test_the_palette_comes_out_under_one_heading_each(self):
+        # The window starts a heading wherever the group changes, so a group
+        # that appears twice draws two headings with other tools between them.
+        seen, runs = set(), []
+        for entry in sketch.palette():
+            if not runs or runs[-1] != entry["group"]:
+                runs.append(entry["group"])
+        self.assertEqual(len(runs), len(set(runs)), runs)
+        self.assertEqual(runs, [name for name, _ids in sketch.GROUPS])
+
+    def test_the_palette_tells_the_window_the_heading(self):
+        groups = {e["group"] for e in sketch.palette()}
+        self.assertNotIn("Other", groups)
+        self.assertEqual(groups, {name for name, _ids in sketch.GROUPS})
 
     def test_geometry_is_one_the_window_can_draw(self):
         for entry_id, _label, geometry, _tags in sketch.PALETTE:

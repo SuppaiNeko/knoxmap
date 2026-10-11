@@ -1,5 +1,177 @@
 # Changelog
 
+## Unreleased
+
+- **Build a building yourself, and have the map use it** (`knoxbuild/designer.py`,
+  new; `knoxbuild/presets.py`, `knoxbuild/build.py`, `app.py`,
+  `static/js/app.js`, `templates/index.html`, `static/css/app.css`). A preset
+  had to come from BuildingEd or out of a map that happened to come out well,
+  and it was only used where a zone was drawn round it. Now there is an editor
+  for one, and a switch per kind of building: turn "police station" on and
+  every police station on the map is the one that was built by hand.
+
+  The editor is its own screen. Set the size, say what the building is, and
+  draw its rooms on the plan - 113 of them, the ones that kind of building is
+  made of offered first, so a police station starts with its cells, its gun
+  store and its lockers rather than with a list of every room in the game.
+  Drawing over a room takes that much of it away and the eraser cuts the
+  footprint, so an L-shaped building is drawn by drawing it. "Lay it out for
+  me" fills the sheet with the building the generator would have made, to
+  change rather than start from nothing.
+
+  Everything that is not the room plan is done by the code that builds the
+  rest of the map: the walls in the style chosen, the doorways, a way in off
+  the street, the windows in bays down the facade, the staircase, the roof and
+  the furniture each room carries. The plan on screen is drawn from the
+  finished building rather than from the rectangles, so what is shown is what
+  the `.tbx` holds, and beside it is what it is built of - the wall tiles by
+  name, each room's floor and its fittings.
+
+  Saved, it is an ordinary `.tbx` with the drawing kept beside it, so it can
+  be opened and changed again. Switch its kind on and every building of that
+  kind takes it where it fits: proved on a row of identical plots, three
+  police stations came out byte for byte the file that was saved, the houses
+  between them were untouched, and two police stations too small for it to
+  stand on were laid out as before - a town with holes in it where no preset
+  fitted would be worse.
+
+  A preset built for a kind is preferred over one built for no kind in
+  particular, so a hand-built shed is never stamped as the town's police
+  station while a police station fits.
+
+  Also fixed: the storeys shown for a preset were one too few (the generator
+  writes a `<floor>` per storey and one more for the roof, not two), and
+  asking for the wall styles of a kind that borrows another's - a police or
+  fire station, a castle, a stadium - raised instead of answering.
+
+- **Buildings built by hand, used again** (`knoxbuild/presets.py`, new;
+  `knoxbuild/zones.py`, `knoxbuild/build.py`, `app.py`, `static/js/app.js`).
+  The generator lays every building out from scratch, which is what makes a
+  map of ten thousand of them possible and is also its limit: it will never
+  produce the house somebody drew themselves, or the terrace they have been
+  perfecting in BuildingEd for a month. A preset is that building, saved
+  whole and stamped onto a plot instead of a generated one.
+
+  A preset is a `.tbx` - the same file the generator writes and BuildingEd
+  reads - and it is used exactly as it was saved. Nothing is converted, nothing
+  is re-rendered and nothing is stretched, which is the whole point of
+  hand-building one: a row of plots inside a preset zone came out byte for
+  byte the file that went in, and the plots outside it came out generated as
+  before.
+
+  A zone names the presets it draws from. A plot takes the biggest that fits
+  inside it - so a plot meant for a cottage does not get a shed on it - chosen
+  from the plot's own seed, so a rebuild puts the same house back on the same
+  spot and a street of identical plots is not a street of one house. A plot
+  nothing fits is laid out by the generator as usual, because a town with
+  holes in it where no preset fitted is worse than one with generated houses
+  among the built ones.
+
+  Drop a `.tbx` into `presets/buildings` beside KnoxMap and it is offered;
+  `/api/presets/buildings` also keeps one from a map that came out well.
+
+- **Zones with settings of their own** (`knoxbuild/zones.py`, new;
+  `knoxbuild/build.py`, `knoxbuild/population.py`, `app.py`,
+  `static/js/app.js`, `templates/index.html`). One set of settings made one
+  kind of town. A real one is not one kind: the centre is taller and denser
+  than the edge, the estate on the hill is all the same brick, the quarantined
+  block has ten times the zombies. Draw a part of the map, write a few
+  settings on it, and anything inside it is built to those; anything outside
+  every zone is built to the map's own, exactly as before.
+
+  Fifteen settings may differ from one part of a town to another - how tall,
+  how often flats, how big the rooms, whose tiles, how many zombies each
+  resident becomes, how many one chunk may hold, how thick the trees, how
+  much parking - and a zone may also pin the walls its buildings are built
+  in. What a zone may **not** set is what decides the whole map: the seed,
+  the scale, the rotation, whether the roads are straightened. Those are the
+  map, not a district of it.
+
+  Zones nest, smallest first, the way the land-use areas already do: a street
+  of shops inside a town centre is read from the inside out. Two zones over
+  one row of flats, measured: the town centre came out up to nine storeys and
+  every wall brick, the quiet edge two storeys and every wall timber, and the
+  ground between them untouched. Zombies went from a peak of 10 a chunk to
+  60 under a zone that asked for it.
+
+  The spawn map is drawn a chunk at a time over the whole map, so the zones
+  are painted into that grid once rather than asked about chunk by chunk - a
+  20,000-tile map is four million point-in-polygon tests otherwise. A map
+  with no zones gets the same settings object it always did, so it costs
+  nothing at all.
+
+- **Twenty-nine more things to draw** (`generator/sketch.py`,
+  `knoxbuild/build.py`). The palette had the shape of a town - roads, water,
+  woods, houses - and not much of what is in one. It has 63 tools now, and
+  every one of them was picked by what the generator already does with it
+  rather than by what the tag is called: a police station, a fire station, a
+  library, a town hall, a bank, a hotel, a cafe, a pub, a garage, a
+  supermarket, a shopping centre, barracks, a stadium, a castle, a barn.
+  Each is furnished as its own kind inside, so a drawn police station has a
+  police station's rooms and a drawn hotel has hotel rooms - 592 of them in
+  the one I built to check.
+
+  Also a pedestrian street, a canal (8 m across, where a river is 12 and a
+  stream 2), a swimming pool, a square, a marsh, an orchard, a sports ground,
+  a pier, and the five kinds of land that decide what the generator makes of
+  untagged buildings standing on them - housing estate, shopping district,
+  industrial estate, army base, school grounds.
+
+  **A petrol station brings its forecourt.** It is a point rather than an
+  outline, because that is where the pumps are laid out from, and drawn
+  points were reaching nothing at all: the build step reads its points out of
+  the download, which nothing drawn by hand is ever in, so a station somebody
+  placed themselves reported "0 pumps at 0 stations, 0 canopies and 0
+  points". It reads the drawing too now - the sheet where there is one, or
+  what was drawn over the map - and one station gets its two pumps.
+
+  The tools are under eight headings rather than one run of sixty-three, and
+  the palette is served in heading order: it had grown by new tools being
+  dropped in beside their like, so "Public buildings" came out as two
+  headings with a row of shops between them.
+
+- **The window is tidier** (`templates/index.html`, `static/css/app.css`,
+  `static/js/app.js`, `generator/sketch.py`). Drawing and editing had arrived
+  as two unnumbered panels dropped into the middle of a numbered flow, which
+  read as neither steps nor not-steps; they are one step now, "3. Draw and
+  edit", with the drawing board above them as the mode it is rather than an
+  afterthought inside the drawing panel. The flow is 1, 2, 3, Generate again.
+
+  **Generate map no longer goes below the fold.** The sidebar scrolls, and
+  with a third step in it the button the whole program leads to needed a
+  scroll to find on an ordinary window. It is pinned to the bottom of the
+  sidebar and is reachable wherever the panel above it has been scrolled to.
+
+  **The palette is under headings** - roads and rails, water, ground,
+  buildings, edges and odds - rather than thirty-four tools in one run that
+  has to be read to the end to find a hedge. The headings are served with the
+  palette so the window and the generator cannot disagree about them, both
+  palettes are built by the same code, and a test fails if a tool is left out
+  of a heading or a heading names a tool that has gone.
+
+- **The editor has a screen of its own: a blank sheet, in metres**
+  (`generator/sketch.py`, `app.py`, `static/js/app.js`,
+  `templates/index.html`, `static/css/app.css`). Drawing was a layer over the
+  world map, which is right for adding a street to a real town and wrong for
+  inventing one: there is no reason to pick a spot on Earth first, and the
+  streets of a made-up place have nothing to line up with. The drawing board
+  is its own full screen - the tools down one side, a sheet with a hundred
+  metre grid, no world under it - and what is drawn on it is measured in
+  metres from the bottom-left corner, which is how somebody laying out a town
+  thinks. Set the sheet to 900 by 900 and build it, and the map is 900 by 900
+  tiles. Drawing on the world map is untouched, and so is editing what a
+  generated map was built from.
+
+  A sheet is pinned to a corner of the world and converted once, where it can
+  be tested, because everything downstream works in latitude and longitude.
+  The conversion is measured the way the renderer measures it rather than
+  worked out from degrees-per-metre, and deliberately lands a fraction under
+  the size asked for: a map is rounded up to whole 300-tile cells, so a 900 m
+  sheet measured as 900.04 m is four cells across instead of three - a third
+  more map, from four centimetres. A sheet is also not turned to find its
+  street grid, having been drawn on one already; that alone had it coming out
+  1200 tiles instead of 900.
+
 ## 1.6.2 editor
 
 - **Edit the map KnoxMap made** (`generator/edits.py`, new; `app.py`,

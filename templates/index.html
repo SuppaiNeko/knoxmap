@@ -206,12 +206,22 @@
       </details>
     </section>
 
-    <!-- Drawing a map by hand. Everything here becomes an ordinary OSM
-         feature before it reaches the generator, so a drawn street is a
-         street as far as every later step can tell. -->
-    <section class="panel" data-card="sketch">
+    <!-- Drawing and editing, as one step rather than three scattered ones.
+         Everything here becomes an ordinary OSM feature before it reaches the
+         generator, so a drawn street is a street as far as every later step
+         can tell (generator/sketch.py); what is changed about a map that
+         already exists is kept beside it as a list of changes
+         (generator/edits.py). -->
+    <section class="panel" data-card="make">
+      <h2>3. Draw and edit <span class="step-note">optional</span></h2>
+
+      <button type="button" id="boardOpen" class="btn btn-wide">Draw a map from
+        scratch</button>
+      <p class="hint">A blank sheet measured in metres, with no world map under
+        it - for a town that is not anywhere.</p>
+
       <details id="sketch">
-        <summary>Draw your own <span class="count" id="sketchCount"></span></summary>
+        <summary>Add to this area <span class="count" id="sketchCount"></span></summary>
         <p class="hint">Pick what to draw, then draw it on the map. It is built
           exactly as a surveyed one would be - a street gets its pavement,
           kerbs and parked cars; a house gets rooms, loot and people.</p>
@@ -225,14 +235,40 @@
         </div>
         <div id="sketchNote" class="hint"></div>
       </details>
-    </section>
 
-    <!-- Changing what KnoxMap already made. The download is left as it came;
-         what is changed about it is kept beside the map as a short list of
-         changes and put back on every time it is built (generator/edits.py). -->
-    <section class="panel" data-card="edit">
+      <details id="zonesPanel">
+        <summary>Zones of their own <span class="count" id="zoneCount"></span></summary>
+        <p class="hint">Draw a part of the map and give it its own settings -
+          a town centre that is taller and thick with zombies, an estate all
+          in one brick, a quiet edge. Anything outside every zone is built to
+          the settings above.</p>
+        <div class="sketch-actions">
+          <button type="button" id="zoneDraw" class="btn">Draw a zone</button>
+          <button type="button" id="zoneSave" class="btn" disabled>Save zones</button>
+        </div>
+        <ul id="zoneList" class="zone-list"></ul>
+        <div id="zoneEditor" class="zone-editor" hidden></div>
+        <div id="zoneNote" class="hint"></div>
+      </details>
+
+      <details id="handBuilt">
+        <summary>Hand-built buildings <span class="count" id="builtCount"></span></summary>
+        <p class="hint">Build a police station, a church or a house yourself -
+          its rooms where you want them - and have the generator use it
+          wherever the map has one of those, instead of laying out its own.</p>
+        <div class="sketch-actions">
+          <button type="button" id="builderOpen" class="btn">Build a building
+            by hand</button>
+        </div>
+        <p class="hint">Use hand-built buildings for:</p>
+        <div id="builtKinds" class="sketch-palette"></div>
+        <ul id="builtList" class="zone-list"></ul>
+        <div id="builtNote" class="hint"></div>
+      </details>
+
       <details id="editMap">
-        <summary>Edit this map <span class="count" id="editCount"></span></summary>
+        <summary>Change what is already here
+          <span class="count" id="editCount"></span></summary>
         <p class="hint">Open a map, then load what it was built from. Click
           anything to remove it or say what it really is; drag its corners to
           move it. Generate map again and the change is in.</p>
@@ -350,6 +386,89 @@
     </li>
   </ol>
 </section>
+
+<!-- The drawing board: the editor's own screen, a blank sheet in metres
+     rather than a layer over the world. Everything on it becomes an ordinary
+     OSM feature before the generator sees it (generator/sketch.py). -->
+<div id="board" hidden>
+  <header class="board-bar">
+    <strong>Drawing board</strong>
+    <label class="board-size">Sheet
+      <input type="number" id="boardWidth" min="100" max="40000" step="50" value="900"> ×
+      <input type="number" id="boardHeight" min="100" max="40000" step="50" value="900"> m</label>
+    <label class="board-size">Name
+      <input type="text" id="boardName" placeholder="my_town" size="12"></label>
+    <span class="board-spacer"></span>
+    <span id="boardCount" class="hint"></span>
+    <button type="button" id="boardUndo" class="btn">Undo</button>
+    <button type="button" id="boardClear" class="btn">Clear</button>
+    <button type="button" id="boardSave" class="btn">Save</button>
+    <button type="button" id="boardBuild" class="btn btn-primary">Build this map</button>
+    <button type="button" id="boardClose" class="btn">Close</button>
+  </header>
+  <div class="board-body">
+    <aside class="board-tools">
+      <p class="hint">Click a tool, then click on the sheet to draw.
+        Double-click to finish a line or a shape.</p>
+      <div id="boardPalette" class="sketch-palette"></div>
+      <div id="boardPicked" class="edit-selected" hidden></div>
+      <p class="hint" id="boardNote"></p>
+    </aside>
+    <div id="boardMap"></div>
+  </div>
+</div>
+
+<!-- The building editor: one building, drawn room by room, built by the same
+     code that builds the rest of the map (knoxbuild/designer.py). What is on
+     the plan is the finished building - its doors, windows and furniture -
+     not the rectangles that were drawn. -->
+<div id="builder" hidden>
+  <header class="board-bar">
+    <strong>Building editor</strong>
+    <label class="board-size">Name
+      <input type="text" id="bdName" placeholder="Oak Street Station" size="14"></label>
+    <label class="board-size">It is a
+      <select id="bdKind"></select></label>
+    <label class="board-size">Size
+      <input type="number" id="bdWidth" min="4" max="150" value="20"> ×
+      <input type="number" id="bdHeight" min="4" max="150" value="16"> tiles</label>
+    <label class="board-size">Storeys
+      <input type="number" id="bdStoreys" min="1" max="8" value="1"></label>
+    <label class="board-size">Walls
+      <select id="bdStyle"></select></label>
+    <span class="board-spacer"></span>
+    <button type="button" id="bdFill" class="btn">Lay it out for me</button>
+    <button type="button" id="bdUndo" class="btn" disabled>Undo</button>
+    <button type="button" id="bdClear" class="btn">Clear</button>
+    <button type="button" id="bdSave" class="btn btn-primary">Save as preset</button>
+    <button type="button" id="bdClose" class="btn">Close</button>
+  </header>
+  <div class="board-body">
+    <aside class="board-tools">
+      <p class="hint">Pick a room, then drag across the plan to draw it.
+        Drawing over a room takes that much of it away; the eraser cuts the
+        shape of the building.</p>
+      <div id="bdRooms" class="sketch-palette"></div>
+    </aside>
+    <div class="builder-sheet">
+      <div class="builder-storeys" id="bdStoreyTabs"></div>
+      <div class="builder-plan" id="bdPlan">
+        <img id="bdImage" alt="The plan of this building">
+        <div id="bdDrag" hidden></div>
+        <p class="hint builder-empty" id="bdEmpty">Nothing drawn yet. Pick a
+          room and drag a rectangle, or let the generator lay one out for you
+          and change what it did.</p>
+      </div>
+      <p class="hint" id="bdNote"></p>
+    </div>
+    <aside class="board-side">
+      <h4>What this storey holds</h4>
+      <ul id="bdTally" class="builder-tally"></ul>
+      <h4>What it is built of</h4>
+      <ul id="bdTiles" class="builder-tiles"></ul>
+    </aside>
+  </div>
+</div>
 
 <div id="toasts" aria-live="polite"></div>
 
