@@ -1550,6 +1550,91 @@ def _count_points(shape: dict) -> int:
     return walk(shape.get("coordinates") or [])
 
 
+def _portable_preset(data: dict) -> tuple[dict | None, str | None]:
+    """Check a shared area before it enters the map widget or leaves this PC."""
+    import math
+    if data.get("format") != "knoxmap-preset" or data.get("version") != 1:
+        return None, "This is not a KnoxMap preset version 1."
+    name = str(data.get("name") or "").strip()[:60]
+    if not name:
+        return None, "Give the area a name."
+    try:
+        south, west, north, east = (float(data[key]) for key in
+                                   ("south", "west", "north", "east"))
+        scale = float(data["metersPerTile"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "The preset needs a valid area and scale."
+    if (not all(math.isfinite(n) for n in (south, west, north, east, scale))
+            or not (-85.05 <= south < north <= 85.05)
+            or not (-180 <= west < east <= 180)
+            or not MIN_METERS_PER_TILE <= scale <= MAX_METERS_PER_TILE):
+        return None, "The preset area or scale is outside the map's limits."
+    shape = data.get("shape")
+    if shape is not None:
+        if not isinstance(shape, dict):
+            return None, "The preset outline is not a polygon."
+        try:
+            if _count_points(shape) > MAX_PRESET_POINTS:
+                return None, f"A shared outline can hold at most {MAX_PRESET_POINTS:,} points."
+            shape, problem = _clean_shape(shape)
+            if problem:
+                return None, problem
+            for ring in _shape_rings(shape):
+                if any(not (math.isfinite(lon) and math.isfinite(lat)
+                            and west - 1e-5 <= lon <= east + 1e-5
+                            and south - 1e-5 <= lat <= north + 1e-5)
+                       for lon, lat in ring):
+                    return None, "The preset outline falls outside its area."
+                # _wrap_lon can turn 20.01 into 20.00999999999999. Keep
+                # share files stable across repeated imports and exports.
+                for point in ring:
+                    point[0], point[1] = round(point[0], 12), round(point[1], 12)
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            return None, "The preset outline could not be read."
+    given = data.get("settings")
+    if not isinstance(given, dict):
+        return None, "The preset needs map settings."
+    kind = data.get("preset") or given.get("preset")
+    if not isinstance(kind, str) or kind not in PRESETS:
+        kind = None
+    return {"format": "knoxmap-preset", "version": 1, "name": name,
+            "south": south, "west": west, "north": north, "east": east,
+            "metersPerTile": 0.5 if scale < 1 else float(round(scale)),
+            "shape": shape, "preset": kind,
+            "settings": Settings.from_dict({**given, **({"preset": kind} if kind else {})}).to_dict()}, None
+
+
+@app.route("/api/presets/validate", methods=["POST"])
+def api_preset_validate():
+    preset, problem = _portable_preset(_json_body())
+    return (jsonify({"error": problem}), 400) if problem else jsonify({"preset": preset})
+
+
+@app.route("/api/presets/export", methods=["POST"])
+def api_preset_export():
+    """Download JSON in a browser; save beside KnoxMap in the desktop window."""
+    preset, problem = _portable_preset(_json_body())
+    if problem:
+        return jsonify({"error": problem}), 400
+    payload = (json.dumps(preset, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", preset["name"]).strip("_") or "area"
+    filename = f"{safe}.knoxmap.json"
+    if os.environ.get("KNOXMAP_WINDOW") == "1":
+        folder = BASE_DIR / "preset_exports"
+        try:
+            folder.mkdir(exist_ok=True)
+            target = folder / filename
+            if target.exists():
+                target = folder / f"{safe}_{time.time_ns()}.knoxmap.json"
+            target.write_bytes(payload)
+        except OSError as exc:
+            return failed(f"Could not export the preset: {exc}", 500, exc)
+        knoxlog.open_folder(target)
+        return jsonify({"name": target.name, "folder": str(folder)})
+    return send_file(io.BytesIO(payload), mimetype="application/json", as_attachment=True,
+                     download_name=filename)
+
+
 @app.route("/api/presets", methods=["GET", "POST"])
 def api_presets():
     """GET lists the saved areas; POST saves one under a name, replacing any

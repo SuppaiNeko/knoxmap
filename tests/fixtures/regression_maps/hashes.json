@@ -1,0 +1,62 @@
+{
+  "dense_city": {
+    "seed": 10101,
+    "preset": "city",
+    "buildings": 32,
+    "cells": 4,
+    "files": {
+      "82_0.lotheader": "1c6d621acb00818f0340247fccd0f57ab90c344af60e363afffa2cb2dfdbb957",
+      "82_1.lotheader": "950ba3294ce4a3e68defbc51f3ea5a610543857df808693fa84a9a2790a5d47b",
+      "83_0.lotheader": "9845e3bf1b4017afad3a8a8cc9c5e8335d743f86890e2075907c96e058fa40f1",
+      "83_1.lotheader": "65457982afd6fe33972d682b6f9c179a054a635a1f7112468d73c82df6e803ea",
+      "chunkdata_82_0.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_82_1.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_83_0.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_83_1.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "world_82_0.lotpack": "94d2558bffe901bc0707f0c4956b106cffac5b6d538604c009e850440768759b",
+      "world_82_1.lotpack": "145db1c3d349b5c840d1b2ee3d07a9c01bbe6612475e384f4e88704dbd536b34",
+      "world_83_0.lotpack": "41bcdd602c9b309ea708023670970fa8e1848daf0648fd0bdd7c9eb8ccccf88d",
+      "world_83_1.lotpack": "5787ed9b1b4d9b9851c9b9b1fb9d8636fe3180bc61d00d2479cee4d5e6bfa6f4"
+    }
+  },
+  "village": {
+    "seed": 20202,
+    "preset": "rural",
+    "buildings": 13,
+    "cells": 4,
+    "files": {
+      "82_0.lotheader": "4a733e1a88bf75f10cefee441737ed6c1a67bba2d0da23fa8bd58b7b2e71c3e2",
+      "82_1.lotheader": "d968593f6ec0ed72645c788b10b82295fd2f72019761788a650e5ce341143654",
+      "83_0.lotheader": "3b97802a10636fa657c0c44fd7d603fc5b7179a526b007615f7f013bc4e112b4",
+      "83_1.lotheader": "1207845f9179feafcca400e7a7f99125d5cbd49fae5392d09d3698d186ee10d0",
+      "chunkdata_82_0.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_82_1.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_83_0.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_83_1.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "world_82_0.lotpack": "910c382920e051027b05c819b98ce917a619467a45e53c3d72384d905b0f02d3",
+      "world_82_1.lotpack": "4c2869eea7b07032263c5ecd1b5043f010262d0b521043bc301e58b0b0a76b71",
+      "world_83_0.lotpack": "21c5b5eee16fe1119189737181bc89006488667b857c070bc74fdb92fd80e3c8",
+      "world_83_1.lotpack": "615e23464091ef5357de9d0395b38c9973077a150d1a4ec30932bceaaf5bd6b8"
+    }
+  },
+  "coast": {
+    "seed": 30303,
+    "preset": "town",
+    "buildings": 10,
+    "cells": 4,
+    "files": {
+      "82_0.lotheader": "2a66df476ecfb6ed6550e23ee39a820b4dd0abaeaa1d37ab816330cca85509b7",
+      "82_1.lotheader": "4f110cb86634a70545050df390be128cd013541cd38f06f5774f464e63bacb2b",
+      "83_0.lotheader": "c894805f7abfe7fed11b599cd8f97d9fbc487ce04152192d73437e845785dca5",
+      "83_1.lotheader": "a7ab8799906772d36954cabadf5938fe458a7a67fd1cf26e016a77c4dc0920cb",
+      "chunkdata_82_0.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_82_1.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_83_0.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "chunkdata_83_1.bin": "5e2d8bd2247f04440aace59349c8d5af5f7ecf01f7f8325538714c0c357a8256",
+      "world_82_0.lotpack": "2d77a49c6614eacfe085c99b603a673d541fedee8bb8b4d593baf1cac3158220",
+      "world_82_1.lotpack": "f1370b78937cf258e9a126524aacc7df91e9190dfe98bedc958ebfd9ae12f7ae",
+      "world_83_0.lotpack": "55252b6fbf718abd5ede08a5c086ef7da755537a608559566ce9d0046245fbd1",
+      "world_83_1.lotpack": "de0368f1ff355da620de2d90515734cd0763c3457293d2e722ddb394ee99fd62"
+    }
+  }
+}

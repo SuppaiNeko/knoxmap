@@ -129,6 +129,14 @@
           <input type="text" id="presetName" maxlength="60" placeholder="Name for this area">
           <button id="presetSave" class="btn btn-small" type="button">Save</button>
         </div>
+        <div class="preset-row preset-share">
+          <button id="presetExport" class="btn btn-small" type="button">Export file</button>
+          <button id="presetImport" class="btn btn-small" type="button">Import file</button>
+          <button id="presetShare" class="btn btn-small" type="button">Copy link</button>
+          <button id="presetOpenLink" class="btn btn-small" type="button">Open link</button>
+          <input id="presetFile" type="file" accept=".json,application/json" hidden>
+        </div>
+        <p class="hint">Share an area and its settings. Imported presets can be saved here or generated directly.</p>
         <div id="presetNote" class="hint"></div>
       </details>
       <div class="coords">

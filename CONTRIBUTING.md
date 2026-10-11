@@ -15,6 +15,20 @@ Run these from the KnoxMap folder (they are what GitHub Actions runs):
 buildings or roads look, also generate a small real area and look at it with
 `tools\render_ground.py`, or better, in the game, and include a screenshot.
 
+To catch byte-level layout changes after modifying the renderer, furnishings,
+map source or Rust compiler, run `\.venv\Scripts\python tools\regression_maps.py`
+(or `python tools/regression_maps.py` on Linux/macOS). It generates a fixed-seed
+dense city, village and coast offline, compiles their cells with **knoxlots**,
+and checks every `.lotheader`, `.lotpack` and `chunkdata` SHA-256 against
+`tests/fixtures/regression_maps/hashes.json`. This needs map-tool
+`Rules.txt`/`Blends.txt` from Setup and `knoxlots` built with `cargo build
+--release`; there is no WorldEd invocation or need to copy game art into git.
+The test fails if either dependency is missing. When a change to the maps is
+intentional, inspect it first, then run `python tools/regression_maps.py
+--record` to accept the new hashes. Review that manifest in the change.
+The manifest and mismatch-reporting unit checks need no extra test framework:
+`python -m unittest discover -s tests -p test_regression_maps.py`.
+
 ## Never commit
 
 - **Project Zomboid files**, including tile sheets extracted by Setup

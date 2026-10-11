@@ -2,6 +2,33 @@
 
 ## 1.6.2 editor
 
+- **The Rust compiler is checked at 51 x 48 cells** (`tools/large_compile_check.py`).
+  A real 861-building map was tiled out to 2,448 cells (about 13,000 x 12,000
+  tiles) and compiled with 4 threads: 43 s, and the compiler itself peaked at
+  95 MiB. `knoxlots verify` rebuilt all 2,448 lotheaders, lotpacks and chunkdata
+  files identically, and every repeated cell came out byte-identical to its
+  original. Not yet checked: loading that map in game, and a single real
+  OpenStreetMap area of this size (the content is repeated, so building density
+  across cells is that of the source map).
+
+- **Three compiled regression maps** (`tools/regression_maps.py`,
+  `tests/fixtures/regression_maps/hashes.json`). Fixed-seed dense-city,
+  village and coastal layouts are rendered, furnished and compiled by the Rust
+  backend entirely offline. A repeat run checks SHA-256 hashes of every lot
+  file and reports the specific files that changed; accepting a deliberate
+  change requires `--record`. The runner uses a temporary folder and a fixed
+  origin, so installed maps cannot affect it.
+
+- **Map areas and settings can be shared** (`app.py`, `static/js/app.js`,
+  `templates/index.html`). The Saved areas panel exports a versioned
+  `.knoxmap.json` file or copies a `?preset=` link with the exact bounds,
+  outline, scale, seed and building settings. Import file and Open link put
+  them back into the map without generating or changing existing user maps.
+  The receiver can paste a localhost link even when their app uses a different
+  port. Exports in the desktop window are written to `preset_exports/` and
+  shown in Explorer; browser downloads work normally. The previous `?q=`
+  place-search links still work.
+
 - **Edit the map KnoxMap made** (`generator/edits.py`, new; `app.py`,
   `static/js/app.js`, `templates/index.html`). A generated map is a reading of
   OpenStreetMap, and a reading is sometimes wrong: a shed the survey calls a

@@ -254,6 +254,7 @@ input[readonly] { background: var(--bg); color: var(--muted); }
 .presets { margin-bottom: 8px; }
 .preset-row { display: flex; gap: 6px; margin: 6px 0; }
 .preset-row select, .preset-row input[type=text] { flex: 1; min-width: 0; }
+.preset-share { flex-wrap: wrap; }
 .hint.bad { color: var(--bad); }
 .layout-preview { margin: 10px 0; }
 .layout-preview img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; }

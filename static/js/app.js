@@ -484,8 +484,10 @@ function readSettings() {
 // Overpass download is kept next to the map, so even a redraw does not fetch
 // the town again (generator/osm.py, save_cache).
 let openedMap = null;
+let importedSettings = null;
 
 function rememberMap(map) {
+  importedSettings = null;
   openedMap = map;
   if (map && map.settings) {
     openedMap.settings = { ...map.settings };
@@ -515,8 +517,10 @@ function rememberMap(map) {
 // The knobs moved since the panel was filled in, by name.
 function changedSettings() {
   if (!openedMap || !openedMap.shown) return [];
-  const now = readSettings();
-  const was = openedMap.shown;
+  return changedFrom(openedMap.shown, readSettings());
+}
+
+function changedFrom(was, now) {
   const out = [];
   for (const [key, value] of Object.entries(now)) {
     if (key === 'preset' || !(key in was)) continue;
@@ -526,6 +530,17 @@ function changedSettings() {
       : String(value) === String(before);
     if (!same) out.push(key);
   }
+  return out;
+}
+
+// Slider controls cannot always represent the exact saved number (e.g. 0.18
+// on a 0.05-step slider). Keep imported and opened-map values until a knob moves.
+function settingsForRequest() {
+  const now = readSettings();
+  const saved = importedSettings || openedMap;
+  if (!saved || !saved.shown || !saved.settings) return now;
+  const out = { ...saved.settings, preset: now.preset };
+  for (const key of changedFrom(saved.shown, now)) out[key] = now[key];
   return out;
 }
 
@@ -629,6 +644,7 @@ document.getElementById('advanced-body').addEventListener('change', showReapply)
 
 document.getElementById('preset').addEventListener('change', () => {
   if (!settingsMeta) return;
+  importedSettings = null;
   const preset = settingsMeta.presets[document.getElementById('preset').value];
   if (preset) buildSettingsForm(preset);
   showReapply();
@@ -636,6 +652,7 @@ document.getElementById('preset').addEventListener('change', () => {
 
 document.getElementById('resetSettings').addEventListener('click', () => {
   if (!settingsMeta) return;
+  importedSettings = null;
   const preset = settingsMeta.presets[document.getElementById('preset').value];
   buildSettingsForm(preset || settingsMeta.defaults);
   showReapply();
@@ -644,6 +661,146 @@ document.getElementById('resetSettings').addEventListener('click', () => {
 // ---- saved areas -----------------------------------------------------------------
 
 let savedAreas = [];
+
+function currentPortablePreset() {
+  if (!currentRect) throw new Error('Draw an area first.');
+  const b = rectBounds(currentRect);
+  return {
+    format: 'knoxmap-preset', version: 1,
+    name: document.getElementById('presetName').value.trim()
+      || document.getElementById('mapName').value.trim() || 'Shared area',
+    south: b.s, west: b.w, north: b.n, east: b.e,
+    shape: selectionShape(), metersPerTile: readScale(), settings: settingsForRequest(),
+  };
+}
+
+async function validatePortablePreset(p) {
+  const res = await fetch('/api/presets/validate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  });
+  const data = await res.json();
+  if (!res.ok) throw apiError(data, res);
+  return data.preset;
+}
+
+function applyPortablePreset(p) {
+  let layer;
+  if (p.shape) {
+    const polys = p.shape.type === 'Polygon' ? [p.shape.coordinates] : p.shape.coordinates;
+    layer = L.polygon(polys.map(rings => rings.map(ring =>
+      ring.map(([lon, lat]) => [lat, lon]))), SEL_STYLE);
+  } else {
+    layer = L.rectangle([[p.south, p.west], [p.north, p.east]], SEL_STYLE);
+  }
+  setSelection(layer);
+  map.fitBounds(layer.getBounds());
+  document.getElementById('metersPerTile').value = p.metersPerTile;
+  document.getElementById('presetName').value = p.name;
+  if (settingsMeta) {
+    const kinds = document.getElementById('preset');
+    kinds.value = [...kinds.options].some(option => option.value === p.preset)
+      ? p.preset : 'town';
+    buildSettingsForm({ ...settingsMeta.defaults, ...p.settings });
+  }
+  openedMap = null;
+  importedSettings = { settings: p.settings, shown: readSettings() };
+  showReapply();
+  fixScaleField();
+  presetNote(`Loaded "${p.name}".`);
+}
+
+async function importPortablePreset(raw) {
+  if (!await settingsReady) throw new Error('Could not load the settings list.');
+  const preset = await validatePortablePreset(raw);
+  applyPortablePreset(preset);
+  document.getElementById('presetsPanel').open = true;
+}
+
+function presetFromLink(link) {
+  const url = new URL(link, location.href);
+  const encoded = url.searchParams.get('preset');
+  if (!encoded || encoded.length > 1000000) throw new Error('This link has no valid KnoxMap preset.');
+  try { return JSON.parse(encoded); }
+  catch (_) { throw new Error('This link has an unreadable KnoxMap preset.'); }
+}
+
+document.getElementById('presetExport').addEventListener('click', async () => {
+  try {
+    const preset = await validatePortablePreset(currentPortablePreset());
+    const res = await fetch('/api/presets/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(preset),
+    });
+    if (!res.ok) throw apiError(await res.json(), res);
+    if (IN_WINDOW) {
+      const data = await res.json();
+      presetNote(`Exported ${data.name} to ${data.folder}.`);
+    } else {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${preset.name.replace(/[^A-Za-z0-9_-]+/g, '_') || 'area'}.knoxmap.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      presetNote(`Exported "${preset.name}".`);
+    }
+  } catch (err) { presetNote(err.message, 'bad'); }
+});
+
+document.getElementById('presetImport').addEventListener('click', () =>
+  document.getElementById('presetFile').click());
+document.getElementById('presetFile').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    if (file.size > 1000000) throw new Error('The preset file is too large.');
+    const content = await file.text();
+    let preset;
+    try { preset = JSON.parse(content); }
+    catch (_) { throw new Error('The preset file is not valid JSON.'); }
+    await importPortablePreset(preset);
+  } catch (err) { presetNote(err.message, 'bad'); }
+  finally { e.target.value = ''; }
+});
+
+document.getElementById('presetShare').addEventListener('click', async () => {
+  try {
+    const preset = await validatePortablePreset(currentPortablePreset());
+    const url = new URL(location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('preset', JSON.stringify(preset));
+    if (url.href.length > 8000) {
+      throw new Error('This outline makes a long link. Use Export file instead.');
+    }
+    let copied = false;
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(url.href); copied = true; }
+      catch (_) { /* embedded windows sometimes deny the Clipboard API */ }
+    }
+    if (!copied) {
+      const box = document.createElement('textarea');
+      box.value = url.href;
+      document.body.appendChild(box);
+      box.select();
+      const copied = document.execCommand('copy');
+      box.remove();
+      if (!copied) throw new Error('Clipboard unavailable. Use Export file instead.');
+    }
+    presetNote('Link copied. The recipient can paste it into Open link in KnoxMap.');
+  } catch (err) { presetNote(err.message, 'bad'); }
+});
+
+document.getElementById('presetOpenLink').addEventListener('click', async () => {
+  const link = window.prompt('Paste a KnoxMap preset link:');
+  if (!link) return;
+  try { await importPortablePreset(presetFromLink(link)); }
+  catch (err) { presetNote(err.message, 'bad'); }
+});
 
 async function loadPresets() {
   try {
@@ -678,7 +835,7 @@ document.getElementById('presetSave').addEventListener('click', async () => {
       body: JSON.stringify({
         name, south: b.s, west: wrapLon(b.w), north: b.n, east: wrapLon(b.e),
         shape: selectionShape(), metersPerTile: readScale(),
-        settings: readSettings(),
+        settings: settingsForRequest(),
       }),
     });
     const data = await res.json();
@@ -693,23 +850,7 @@ document.getElementById('presetSave').addEventListener('click', async () => {
 document.getElementById('presetLoad').addEventListener('click', () => {
   const p = savedAreas.find(a => a.name === document.getElementById('presetList').value);
   if (!p) return;
-  let layer;
-  if (p.shape) {
-    const polys = p.shape.type === 'Polygon' ? [p.shape.coordinates] : p.shape.coordinates;
-    layer = L.polygon(polys.map(rings => rings.map(ring =>
-      ring.map(([lon, lat]) => [lat, lon]))), SEL_STYLE);
-  } else {
-    layer = L.rectangle([[p.south, p.west], [p.north, p.east]], SEL_STYLE);
-  }
-  setSelection(layer);
-  map.fitBounds(layer.getBounds());
-  document.getElementById('metersPerTile').value = p.metersPerTile;
-  if (settingsMeta) {
-    if (p.preset) document.getElementById('preset').value = p.preset;
-    buildSettingsForm({ ...settingsMeta.defaults, ...p.settings });
-  }
-  fixScaleField();
-  presetNote(`Loaded "${p.name}".`);
+  applyPortablePreset(p);
 });
 
 document.getElementById('presetDelete').addEventListener('click', async () => {
@@ -889,9 +1030,10 @@ document.getElementById('steamSave').addEventListener('click', async () => {
   }
 });
 
-loadSettings().catch(() => {
+const settingsReady = loadSettings().then(() => true).catch(() => {
   document.getElementById('advanced-body').textContent =
     'Could not load the settings list.';
+  return false;
 });
 
 // ---- maps already made -----------------------------------------------------------
@@ -1134,7 +1276,7 @@ document.getElementById('generateBtn').addEventListener('click', async () => {
     east: bb.e,
     metersPerTile: readScale(),
     mapName: chosen,
-    settings: readSettings(),
+    settings: settingsForRequest(),
     shape: selectionShape(),
     // What was drawn by hand, and whether it is the whole map.
     sketch: sketchGeoJSON(),
@@ -1654,7 +1796,7 @@ document.getElementById('buildingsBtn').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       // Sent again so the buildings can be regenerated with different
       // settings without re-downloading the town from OSM.
-      body: JSON.stringify({ mapName: currentMap, settings: readSettings() }),
+      body: JSON.stringify({ mapName: currentMap, settings: settingsForRequest() }),
     });
     const data = await res.json();
     if (wasStopped(data, res)) {
@@ -1806,7 +1948,7 @@ document.getElementById('recountBtn').addEventListener('click', async () => {
   try {
     const res = await fetch('/api/zombies', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mapName: currentMap, settings: readSettings() }),
+      body: JSON.stringify({ mapName: currentMap, settings: settingsForRequest() }),
     });
     const data = await res.json();
     if (!res.ok) throw apiError(data, res);
@@ -1959,10 +2101,18 @@ function pollCompile() {
 }
 
 // ---- links straight to a place ----------------------------------------------------
-// ?q=<place> searches on load and selects the first match; &outline=1 takes its
-// real boundary instead of a box. Handy for sharing "make this" with someone.
-(function openFromLink() {
+// ?preset=<JSON> restores an exact area and settings, while ?q= and &outline=1
+// still search for a place. A pasted link works when the app's local port differs.
+(async function openFromLink() {
   const params = new URLSearchParams(location.search);
+  if (params.has('preset')) {
+    try { await importPortablePreset(presetFromLink(location.href)); }
+    catch (err) {
+      document.getElementById('presetsPanel').open = true;
+      presetNote(err.message, 'bad');
+    }
+    return;
+  }
   const q = params.get('q');
   if (!q) return;
   searchInput.value = q;
