@@ -11,9 +11,9 @@
 # Espanol - Spanish, from a KnoxMap player.
 
 0.5 m per tile (small areas) = 0,5 m por mosaico (áreas pequeñas)
-1 lays every road in straight runs along the tiles and on 45-degree diagonals, and stands every building upright beside them, like the game’s own map. 0 draws roads as they are. = 1 traza cada carretera en tramos rectos a lo largo de las casillas y en diagonales de 45 grados, y levanta cada edificio recto junto a ellas, como el mapa del propio juego. 0 dibuja las carreteras tal como son.
+On lays every road in straight runs along the tiles and on 45-degree diagonals. Off draws roads as they are. = 1 traza cada carretera en tramos rectos a lo largo de las casillas y en diagonales de 45 grados, y levanta cada edificio recto junto a ellas, como el mapa del propio juego. 0 dibuja las carreteras tal como son.
 1 m per tile (recommended) = 1 m por mosaico (recomendado)
-1 turns the map so the main street grid runs along the tiles - no staircase roads. 0 keeps north up. = 1 gira el mapa para que la cuadrícula de las calles principales discurra a lo largo de los mosaicos —sin calles en escalera—. 0 mantiene el norte arriba.1. Área
+On turns the map so the main street grid runs along the tiles - no staircase roads. Off keeps north up. = 1 gira el mapa para que la cuadrícula de las calles principales discurra a lo largo de los mosaicos —sin calles en escalera—. 0 mantiene el norte arriba.
 1. Area = 1. Área
 2 m per tile = 2 m por mosaico
 2. Settings = 2. Configuración

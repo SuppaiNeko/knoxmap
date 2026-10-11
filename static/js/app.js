@@ -403,17 +403,17 @@ const SETTING_LABELS = {
   spawn_density:       ['Horde cap', 'Most zombies one 10×10 m spot can hold. Vanilla towns peak at 10.'],
   tree_density:        ['Woodland', 'Scales tree cover. Trees are cover to hide in.'],
   seed:                ['Seed', 'Same seed and area gives the same town again.'],
-  fill_gaps:           ['Fill gaps from Overture', '1 adds the buildings OpenStreetMap has not got, from Overture Maps - OSM plus machine-detected roofprints, same licence. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Needs DuckDB.'],
-  true_map:            ['True map generation', '1 builds every address as mapped. 0 keeps the real roads, rivers, woods and terrain, but leaves out half the houses and grows the rest into proper homes with yards. Named places are always built, at the game’s size.'],
-  guaranteed_rifle:    ['Guaranteed rifle', '1 leaves one military rifle on the map: in an army building if there is one, else the police station, else a gun shop, else a house on the edge of town. A real town has no checkpoints for one to spawn in.'],
+  fill_gaps:           ['Fill gaps from Overture', 'On adds the buildings OpenStreetMap has not got, from Overture Maps - OSM plus machine-detected roofprints, same licence. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Needs DuckDB.'],
+  true_map:            ['True map generation', 'On builds every address as mapped. Off keeps the real roads, rivers, woods and terrain, but leaves out half the houses and grows the rest into proper homes with yards. Named places are always built, at the game’s size.'],
+  guaranteed_rifle:    ['Guaranteed rifle', 'On leaves one military rifle on the map: in an army building if there is one, else the police station, else a gun shop, else a house on the edge of town. A real town has no checkpoints for one to spawn in.'],
   min_size:            ['Smallest building', 'Buildings narrower than this many tiles are left out.'],
-  align_streets:       ['Straighten streets', '1 turns the map so the main street grid runs along the tiles - no staircase roads. 0 keeps north up.'],
+  align_streets:       ['Straighten streets', 'On turns the map so the main street grid runs along the tiles - no staircase roads. Off keeps north up.'],
   rotate_degrees:      ['Turn the map', 'Degrees to turn the whole area before it is built, on top of Straighten streets. Use it when the automatic angle picks the wrong grid.'],
-  straight_roads:      ['Knox County roads', '1 lays every road in straight runs along the tiles and on 45-degree diagonals. 0 draws roads as they are.'],
+  straight_roads:      ['Knox County roads', 'On lays every road in straight runs along the tiles and on 45-degree diagonals. Off draws roads as they are.'],
   max_size:            ['Largest building', 'Footprints above this are skipped.'],
   apartment_footprint: ['Flats above', 'An untagged footprint this big reads as flats.'],
   apartment_chance:    ['Flats chance', 'How often such a footprint really becomes flats.'],
-  vanilla_tiles:       ['Vanilla tiles only', '1 builds with the game’s own art only, leaving Erika’s Tiles out even when it is installed. A map built with the mod needs the mod to look right, so this is the one to turn on before handing a map to somebody who has not subscribed.'],
+  vanilla_tiles:       ['Vanilla tiles only', 'On builds with the game’s own art only, leaving Erika’s Tiles out even when it is installed. A map built with the mod needs the mod to look right, so this is the one to turn on before handing a map to somebody who has not subscribed.'],
   max_levels:          ['Tallest building', 'Storeys, up to 30 - as tall as the base game gets. OSM heights are capped to this. Tall cities take longer to compile.'],
   room_size:           ['Room size', 'Target room area in tiles before it gets split.'],
   building_alignment:  ['Building alignment', 'Real preserves the mapped outline. Smart squares near-grid buildings. Rectilinear aligns the dominant wall direction while keeping the footprint shape. Rectangle uses a clean box.'],
@@ -442,8 +442,12 @@ function buildSettingsForm(values) {
       : Number.isInteger(settingsMeta.defaults[key]);
     const choices = settingsMeta.options?.[key];
     const isChoice = Array.isArray(choices);
+    // A setting that is only ever 0 or 1 is a switch, not a quantity. As a
+    // slider it was two positions wide, read "1" or "0" rather than on or
+    // off, and could be left halfway on a touchscreen.
+    const isSwitch = !isChoice && isInt && lo === 0 && hi === 1;
     const wrap = document.createElement('div');
-    wrap.className = 'setting';
+    wrap.className = isSwitch ? 'setting setting-switch' : 'setting';
     // A seed is an identifier, not a quantity: nobody wants to drag a slider
     // across two billion values to find one, so it gets a box and a dice.
     const control = key === 'seed'
@@ -453,11 +457,21 @@ function buildSettingsForm(values) {
       : isChoice
       ? `<select data-key="${key}">${choices.map(([value, name]) =>
           `<option value="${value}"${value === values[key] ? ' selected' : ''}>${name}</option>`).join('')}</select>`
+      : isSwitch
+      ? ''
       : `<input type="range" data-key="${key}" min="${lo}" max="${hi}"
            step="${isInt ? 1 : 0.05}" value="${values[key]}">`;
+    // The switch sits in the heading, where the number used to be: the name
+    // on the left, what it is set to on the right, the hint underneath.
+    const head = isSwitch
+      ? `<label class="switch"><input type="checkbox" role="switch"
+           data-key="${key}" aria-label="${label}"${values[key] ? ' checked' : ''}>
+         <span class="switch-track"></span></label>`
+      : key === 'seed' || isChoice ? ''
+      : `<output class="setting-val">${values[key]}</output>`;
     wrap.innerHTML = `
       <div class="setting-head"><span class="setting-name">${label}</span>
-        ${key === 'seed' || isChoice ? '' : `<output class="setting-val">${values[key]}</output>`}</div>
+        ${head}</div>
       ${control}
       <span class="setting-hint">${hint}</span>`;
     body.appendChild(wrap);
@@ -468,6 +482,11 @@ function buildSettingsForm(values) {
 function readSettings() {
   const out = { preset: document.getElementById('preset').value };
   for (const el of document.querySelectorAll('#advanced-body [data-key]')) {
+    // A switch is on or off, and sends the 1 or 0 the generator reads.
+    if (el.type === 'checkbox') {
+      out[el.dataset.key] = el.checked ? 1 : 0;
+      continue;
+    }
     // Blank means "whatever the preset says" rather than zero.
     if (el.value.trim() !== '') {
       out[el.dataset.key] = el.tagName === 'SELECT' ? el.value : parseFloat(el.value);
@@ -2788,6 +2807,12 @@ function zonePick(i) {
   drawZoneEditor();
 }
 
+// A zone setting that is only ever 0 or 1: it gets on, off, or nothing at
+// all, rather than a box to type 1 into.
+function zoneSwitchable(setting) {
+  return setting.int && setting.min === 0 && setting.max === 1;
+}
+
 function drawZoneEditor() {
   const box = document.getElementById('zoneEditor');
   const zone = zoneList[zonePicked];
@@ -2820,10 +2845,20 @@ function drawZoneEditor() {
     <p class="hint">Leave a box empty and the map's own setting is used there.</p>
     ${zoneMeta.settings.map(s => `<label><span>${escapeHtml(SETTING_LABELS[s.id]
         ? SETTING_LABELS[s.id][0] : s.id)}</span>
-      <input type="number" data-zone-key="${s.id}" min="${s.min}" max="${s.max}"
-        step="${s.int ? 1 : 0.05}" placeholder="${s.default}"
-        class="${zone.settings[s.id] !== undefined ? 'zone-set' : ''}"
-        value="${zone.settings[s.id] !== undefined ? zone.settings[s.id] : ''}"></label>`).join('')}`;
+      ${zoneSwitchable(s)
+        // On or off, and a third state the number box could not say: leave it
+        // to the map. A zone sets what is different about it, not everything.
+        ? `<select data-zone-key="${s.id}"
+             class="${zone.settings[s.id] !== undefined ? 'zone-set' : ''}">
+           <option value="">As the map is</option>
+           <option value="1"${zone.settings[s.id] === 1 ? ' selected' : ''}>On</option>
+           <option value="0"${zone.settings[s.id] === 0 ? ' selected' : ''}>Off</option>
+           </select>`
+        : `<input type="number" data-zone-key="${s.id}" min="${s.min}" max="${s.max}"
+             step="${s.int ? 1 : 0.05}" placeholder="${s.default}"
+             class="${zone.settings[s.id] !== undefined ? 'zone-set' : ''}"
+             value="${zone.settings[s.id] !== undefined ? zone.settings[s.id] : ''}">`}
+      </label>`).join('')}`;
 
   document.getElementById('zoneName').addEventListener('input', ev => {
     zone.name = ev.target.value; zoneDirty(true); drawZoneList();
@@ -2844,7 +2879,7 @@ function drawZoneEditor() {
     });
   }
   for (const input of box.querySelectorAll('[data-zone-key]')) {
-    input.addEventListener('input', ev => {
+    input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', ev => {
       const key = ev.target.dataset.zoneKey;
       if (ev.target.value.trim() === '') delete zone.settings[key];
       else zone.settings[key] = parseFloat(ev.target.value);

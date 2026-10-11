@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **The on/off settings are switches** (`static/js/app.js`, `static/css/app.css`,
+  `lang/`). Six settings are only ever on or off - true map generation, the
+  guaranteed rifle, straightened streets, Knox County roads, vanilla tiles
+  only, filling gaps from Overture - and each was a slider two positions wide
+  whose reading was "1" or "0". Each is a switch now, in the heading where the
+  number used to be, and their hints say what on and off do rather than what 1
+  and 0 do. A zone's two on/off settings become As the map is / On / Off, so
+  nobody types a 1 into a box to turn something on in one district.
+
 ## 1.7
 
 - **Build a building yourself, and have the map use it** (`knoxbuild/designer.py`,
