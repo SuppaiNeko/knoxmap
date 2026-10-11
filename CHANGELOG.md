@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.1
 
 - **The on/off settings are switches** (`static/js/app.js`, `static/css/app.css`,
   `lang/`). Six settings are only ever on or off - true map generation, the
