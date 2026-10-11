@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7
 
 - **Build a building yourself, and have the map use it** (`knoxbuild/designer.py`,
   new; `knoxbuild/presets.py`, `knoxbuild/build.py`, `app.py`,
