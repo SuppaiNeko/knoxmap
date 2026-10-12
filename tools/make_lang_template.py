@@ -43,6 +43,17 @@ HEADER = """\
 
 # Text that is not worth translating: names, symbols and numbers.
 SKIP = {"KnoxMap", "discord", "OpenStreetMap", "Leaflet", "×", "→", "?"}
+# These preset validation errors come from app.py rather than a page script.
+# They are shown in the Saved areas panel just like client-side messages.
+PRESET_ERRORS = (
+    "This is not a KnoxMap preset version 1.",
+    "The preset needs a valid area and scale.",
+    "The preset area or scale is outside the map's limits.",
+    "The preset outline is not a polygon.",
+    "The preset outline falls outside its area.",
+    "The preset outline could not be read.",
+    "The preset needs map settings.",
+)
 # Anything that is code rather than words: a selector, a path, a template.
 CODE = re.compile(r"^[#./]|[\[\]{}<>$`|]|https?:|^\w+-\w+$")
 
@@ -91,7 +102,7 @@ def script_strings(paths) -> list[str]:
 
 
 def main() -> int:
-    strings = page_strings(PAGE) + script_strings(SCRIPTS)
+    strings = page_strings(PAGE) + script_strings(SCRIPTS) + list(PRESET_ERRORS)
     seen, lines = set(), []
     for text in strings:
         if text in SKIP or text in seen or "=" in text:

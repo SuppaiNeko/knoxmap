@@ -2958,6 +2958,89 @@ def check_saved_areas(check, work: str) -> None:
         knoxapp.PRESETS_FILE = was
 
 
+def check_portable_presets(check, work: str) -> None:
+    """Portable presets survive export/import and refuse unusable map geometry."""
+    import app as knoxapp
+    import json as _json
+    import os as _os
+    from unittest.mock import patch
+
+    client = knoxapp.app.test_client()
+    polygon = {"type": "Polygon", "coordinates": [
+        [[20, 40], [20.01, 40], [20.01, 40.01], [20, 40.01], [20, 40]]]}
+    data = {"format": "knoxmap-preset", "version": 1, "name": "Village / A",
+            "south": 40, "west": 20, "north": 40.01, "east": 20.01,
+            "metersPerTile": 2, "shape": polygon,
+            "settings": {"preset": "city", "seed": 42, "max_levels": 12,
+                         "arch_style": "cn", "tree_density": 0.25}}
+    reply = client.post("/api/presets/validate", json=data)
+    good = reply.get_json().get("preset", {})
+    check(reply.status_code == 200 and good.get("shape") == polygon
+          and good.get("settings", {}).get("seed") == 42
+          and good.get("settings", {}).get("arch_style") == "cn"
+          and good.get("preset") == "city",
+          "a portable outline, scale and settings survive validation")
+    exported = client.post("/api/presets/export", json=data)
+    check(exported.status_code == 200
+          and "attachment" in exported.headers.get("Content-Disposition", "")
+          and _json.loads(exported.data) == good,
+          "the browser downloads an importable portable JSON preset")
+    restored = client.post("/api/presets/validate", json=_json.loads(exported.data))
+    check(restored.status_code == 200 and restored.get_json()["preset"] == good,
+          "an exported preset imports without losing any settings or coordinates")
+    page = client.get("/").get_data(as_text=True)
+    labels = ("Export file", "Import file", "Copy link", "Open link")
+    english = (Path(knoxapp.BASE_DIR) / "lang" / "english.txt").read_text(encoding="utf-8")
+    check(all(f'id="{tag}"' in page for tag in
+              ("presetExport", "presetImport", "presetShare", "presetOpenLink", "presetFile"))
+          and all(f"{label} = {label}" in english for label in labels),
+          "all sharing controls and their English translations are present")
+    rect = {**data, "shape": None, "metersPerTile": 0.5, "name": "Rectangle"}
+    simple = client.post("/api/presets/validate", json=rect)
+    check(simple.status_code == 200 and simple.get_json()["preset"]["shape"] is None
+          and simple.get_json()["preset"]["metersPerTile"] == 0.5,
+          "a rectangular selection with half-metre scale is shareable")
+    poly2 = {"type": "MultiPolygon", "coordinates": [polygon["coordinates"]]}
+    multi = client.post("/api/presets/validate", json={**data, "shape": poly2})
+    check(multi.status_code == 200 and multi.get_json()["preset"]["shape"] == poly2,
+          "a MultiPolygon survives the same round trip")
+    bad_cases = [
+        {**data, "format": "unknown"},
+        {**data, "version": 2},
+        {**data, "south": 40.02},
+        {**data, "west": float("nan")},
+        {**data, "metersPerTile": 0},
+        {**data, "settings": None},
+        {**data, "shape": {"type": "Point", "coordinates": [20, 40]}},
+        {**data, "shape": {"type": "Polygon", "coordinates": [
+            [[20, 40], [20.01, 40], [20.02, 40], [20, 40]]]}},
+        {**data, "shape": {"type": "Polygon", "coordinates": [
+            [[20, 40], [20.03, 40], [20.03, 40.01], [20, 40]]]}},
+        {**data, "shape": {"type": "Polygon", "coordinates": [
+            [[20, 40]] * (knoxapp.MAX_PRESET_POINTS + 1)]}},
+    ]
+    check(all(client.post("/api/presets/validate", json=d).status_code == 400
+              for d in bad_cases),
+          "invalid format, coordinates, scale and outlines cannot be imported")
+    odd_preset = client.post("/api/presets/validate", json={**data, "preset": ["city"]})
+    check(odd_preset.status_code == 200 and odd_preset.get_json()["preset"]["preset"] is None,
+          "a malformed optional style name cannot crash a preset import")
+    target_root = Path(work) / "portable_preset_export"
+    target_root.mkdir(exist_ok=True)
+    with patch.object(knoxapp, "BASE_DIR", target_root), \
+            patch("knoxlog.open_folder") as show, \
+            patch.dict(_os.environ, {"KNOXMAP_WINDOW": "1"}):
+        first = client.post("/api/presets/export", json=data)
+        second = client.post("/api/presets/export", json=data)
+        folder = target_root / "preset_exports"
+        files = list(folder.glob("*.knoxmap.json"))
+        check(first.status_code == 200 and second.status_code == 200
+              and len(files) == 2 and show.call_count == 2
+              and all(_json.loads(path.read_text(encoding="utf-8")) == good
+                      for path in files),
+              "the desktop exports a real file without overwriting an existing export")
+
+
 def check_health(check) -> None:
     """The health check answers without the network, and says what the PC holds."""
     import app as knoxapp
@@ -3935,6 +4018,7 @@ def main(argv: list[str]) -> int:
         check_street_angle(check)
         check_odd_requests(check, work)
         check_saved_areas(check, work)
+        check_portable_presets(check, work)
         check_health(check)
         check_worlded_size(check)
         check_other_websites(check)
