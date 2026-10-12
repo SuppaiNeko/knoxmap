@@ -200,6 +200,104 @@ def _rooms_of(design: dict, level: int) -> list[L.Room]:
             for r in design["rooms"] if r["level"] == level]
 
 
+def _split_by(box: tuple[int, int, int, int],
+              core: tuple[int, int, int, int]) -> int:
+    """How badly a staircase cuts a room: 2 if it leaves two pieces, 1 if it
+    takes a bite out of one, 3 if it eats the room whole.
+
+    A strip two tiles thick is not a room - the layout folds anything that
+    thin into its neighbour (_mend_fragments) - so a shaft that leaves only
+    strips has eaten the room, whatever the arithmetic says.
+    """
+    pieces = [piece for piece in L._subtract(box, [core])
+              if min(piece[2] - piece[0], piece[3] - piece[1]) + 1 >= 3]
+    if not pieces:
+        return 3
+    if len(pieces) == 1:
+        return 1
+    # _subtract gives rectangles, not regions: two of them along the same side
+    # of the shaft are still one room. Walk them to see which really touch.
+    seen = {0}
+    edge = [0]
+    while edge:
+        i = edge.pop()
+        ax0, ay0, ax1, ay1 = pieces[i]
+        for j, (bx0, by0, bx1, by1) in enumerate(pieces):
+            if j in seen:
+                continue
+            if (ax0 <= bx1 + 1 and bx0 <= ax1 + 1
+                    and ay0 <= by1 + 1 and by0 <= ay1 + 1):
+                seen.add(j)
+                edge.append(j)
+    return 1 if len(seen) == len(pieces) else 2
+
+
+def _core_for(design: dict, rng: random.Random):
+    """Where the staircase goes in a building somebody drew.
+
+    The generator puts its shaft in the middle of the floor, which is right
+    for a plan it laid out itself around one. Over a drawing it is wrong: the
+    shaft landed in the middle of a drawn room and cut it in two, and in a
+    room barely bigger than the shaft it ate the whole thing - draw a 6x6
+    room on a two-storey building and what came back was two rooms.
+
+    So it is put where it takes the least out of what was drawn: a corner of
+    one room rather than its middle, against an outside wall where a house
+    really keeps its stairs. It must stand on painted floor on every storey,
+    because a shaft over the garden upstairs is a flight into the air.
+    """
+    width, height = design["width"], design["height"]
+    levels = design["storeys"]
+    masks = [_mask(design, level) for level in range(levels)]
+    rooms = [(level, (r["x"], r["y"], r["x"] + r["w"] - 1, r["y"] + r["h"] - 1))
+             for level in range(levels)
+             for r in design["rooms"] if r["level"] == level]
+
+    best, best_score = [], None
+    for cw, ch in ((L.CORE_WIDE, L.STAIR_RUN + 1), (L.STAIR_RUN + 1, L.CORE_WIDE)):
+        if cw > width or ch > height:
+            continue
+        for y0 in range(height - ch + 1):
+            for x0 in range(width - cw + 1):
+                core = (x0, y0, x0 + cw - 1, y0 + ch - 1)
+                if not all(mask[y][x] for mask in masks
+                           for y in range(y0, y0 + ch)
+                           for x in range(x0, x0 + cw)):
+                    continue
+                harm = eaten = 0
+                for _level, box in rooms:
+                    if (box[0] > core[2] or box[2] < core[0]
+                            or box[1] > core[3] or box[3] < core[1]):
+                        continue
+                    cut = _split_by(box, core)
+                    harm += cut
+                    eaten += cut == 3
+                # Against a wall: how much of the shaft's own edge has nothing
+                # painted beyond it.
+                outside = 0
+                for y in range(y0, y0 + ch):
+                    for x, step in ((x0, -1), (x0 + cw - 1, 1)):
+                        at = x + step
+                        outside += at < 0 or at >= width or not masks[0][y][at]
+                for x in range(x0, x0 + cw):
+                    for y, step in ((y0, -1), (y0 + ch - 1, 1)):
+                        at = y + step
+                        outside += at < 0 or at >= height or not masks[0][at][x]
+                score = (eaten, harm, -outside,
+                         round(abs((x0 + cw / 2) - width / 2)
+                               + abs((y0 + ch / 2) - height / 2), 3))
+                if best_score is None or score < best_score:
+                    best, best_score = [core], score
+                elif score == best_score:
+                    best.append(core)
+    # Every place the stairs could stand would swallow a room whole, which is
+    # to say the drawing has no room for stairs: one storey of it, then, the
+    # same answer as a building with nowhere to put a shaft at all.
+    if not best or best_score[0]:
+        return None
+    return rng.choice(best)
+
+
 def style_for(design: dict) -> dict:
     """The materials this building is built of.
 
@@ -255,8 +353,7 @@ def stack(design: dict, settings: Settings | None = None,
 
     core = stairs = None
     if levels > 1:
-        core = L._pick_core(design["width"], design["height"],
-                            _mask(design, 0), rng, None)
+        core = _core_for(design, rng)
         if core is None:
             levels = 1          # nowhere for a staircase, so one storey it is
         else:

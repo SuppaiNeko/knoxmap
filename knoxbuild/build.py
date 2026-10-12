@@ -459,10 +459,43 @@ def building_levels(tags: dict, kind: str | None, area_tiles: int,
         lo, hi = CN_DEFAULT_LEVELS.get(kind or "", (lo, hi))
     real_m2 = area_tiles * metres_per_tile * metres_per_tile
     pool = area_level_pool(kind, real_m2, region)
-    if pool:
-        return max(1, min(settings.max_levels, rng.choice(pool))), False
-    return rng.randint(min(lo, settings.max_levels),
-                       min(hi, settings.max_levels)), False
+
+    def draw() -> int:
+        if pool:
+            return max(1, min(settings.max_levels, rng.choice(pool)))
+        return rng.randint(min(lo, settings.max_levels),
+                           min(hi, settings.max_levels))
+
+    return _mixed_levels(draw, settings, rng), False
+
+
+def _mixed_levels(draw, settings: Settings, rng) -> int:
+    """Shape an unmapped building's height to the skyline that was asked for.
+
+    The guess itself (the kind and the footprint) is what knows a factory from
+    a bungalow, so it is kept and leaned on rather than replaced: two draws
+    and the lower of them for a low town, the higher for a tall one, the mean
+    for one that gathers in the middle. "Even" is the exception and means what
+    it says - every height up to the tallest, equally often - because that is
+    what was asked for and no guess survives it.
+    """
+    mix = getattr(settings, "height_mix", "auto")
+    if mix == "even":
+        return rng.randint(1, max(1, settings.max_levels))
+    first = draw()
+    if mix == "auto":
+        return first
+    if mix == "middle":
+        # The middle of three, not the mean of two: averaging a pool of 2, 3
+        # and 4 rounds its halves outwards and came out wider than the guess
+        # it was supposed to gather in.
+        return sorted((first, draw(), draw()))[1]
+    second = draw()
+    if mix == "low":
+        return min(first, second)
+    if mix == "tall":
+        return max(first, second)
+    return first
 
 
 def classify_building(tags: dict) -> str | None:
@@ -868,6 +901,9 @@ def _ring_points(geom: dict) -> list[list[float]]:
 
 
 STREET_LOOK_TILES = 40
+# How far off a wall counts as standing at the water's edge. A building this
+# close to water on one side has its door on another.
+SHORE_LOOK_TILES = 6
 RETAIL_DENSITY = 0.28
 
 
@@ -889,20 +925,25 @@ def _street_finder(out_dir: str, map_name: str,
     paved = np.zeros(g.shape[:2], dtype=bool)
     for c in (PC.PALE_CONCRETE, PC.MEDIUM_ASPHALT, PC.DARKEST_ASPHALT):
         paved |= same_colour(g, c)
+    water = same_colour(g, PC.WATER)
     H, W = paved.shape
 
     def side(x0: int, y0: int, w: int, h: int) -> str | None:
         best, best_score = None, STREET_LOOK_TILES + 1
+        wet = {}
         for name, (dx, dy) in (("N", (0, -1)), ("S", (0, 1)), ("W", (-1, 0)), ("E", (1, 0))):
             if dx == 0:
                 starts = [(x0 + w * f // 4, y0 if dy < 0 else y0 + h - 1) for f in (1, 2, 3)]
             else:
                 starts = [(x0 if dx < 0 else x0 + w - 1, y0 + h * f // 4) for f in (1, 2, 3)]
+            near_water = SHORE_LOOK_TILES + 1
             for sx, sy in starts:
                 for d in range(1, STREET_LOOK_TILES + 1):
                     x, y = sx + dx * d, sy + dy * d
                     if not (0 <= x < W and 0 <= y < H):
                         break
+                    if d <= SHORE_LOOK_TILES and water[y, x]:
+                        near_water = min(near_water, d)
                     if paved[y, x]:
                         rank = (int(road_hierarchy[y, x])
                                 if road_hierarchy is not None else 0)
@@ -910,7 +951,19 @@ def _street_finder(out_dir: str, map_name: str,
                         if score < best_score:
                             best, best_score = name, score
                         break
-        return best
+            wet[name] = near_water
+        if best is not None:
+            return best
+        # Nothing paved within reach. If the building stands over or beside
+        # water - a boathouse, a hut on a pier - the way in is whichever side
+        # is not water; without this every door on a pier faced the lake,
+        # because a building with no street found gets its door on the south
+        # wall by default.
+        if min(wet.values()) <= SHORE_LOOK_TILES:
+            away = {"N": "S", "S": "N", "W": "E", "E": "W"}[
+                min(wet, key=lambda name: (wet[name], name))]
+            return max(wet, key=lambda name: (wet[name], name == away, name))
+        return None
 
     return side
 
@@ -924,10 +977,26 @@ def _load_road_hierarchy(out_dir: str, map_name: str, proj) -> np.ndarray | None
     return read_gray(path, crop=(proj.height, proj.width))
 
 
+# Land whose ground is painted in a road's colours but is not a road: an
+# industrial estate's gravel yard. A car park is left out - a building in the
+# middle of one is a kiosk nobody mapped, and keeping footprints off car parks
+# is right.
+YARD_AREAS = {"industrial"}
+
+
 def _road_weight(out_dir: str, map_name: str, proj,
-                 road_hierarchy: np.ndarray | None = None) -> np.ndarray | None:
+                 road_hierarchy: np.ndarray | None = None,
+                 areas=None) -> np.ndarray | None:
     """2 on carriageway, 1 on pavement, 0 elsewhere, from the ground as the
-    renderer drew it."""
+    renderer drew it.
+
+    The ground alone cannot always tell a road from a yard: an industrial
+    estate is painted in the same beige gravel as a track bed, so every
+    footprint inside one was refused as standing on the road and the estate
+    came out as empty gravel in the exact shape of its polygon. Where the land
+    is what made the ground look like that, and no real road runs over it, it
+    is ground a building may stand on.
+    """
     from PIL import Image
 
     from generator import pz_colors as C
@@ -944,11 +1013,17 @@ def _road_weight(out_dir: str, map_name: str, proj,
     for colour in (C.DARK_ASPHALT, C.MEDIUM_ASPHALT, C.LIGHT_ASPHALT,
                    C.DARKEST_ASPHALT, C.DARK_POTHOLE, C.LIGHT_POTHOLE):
         weight[same_colour(ground, colour)] = 2
+    classified = None
     if road_hierarchy is not None:
         # The mask includes each road's sidewalk width. Larger road classes
         # carry a stronger cost so footprints settle behind local streets.
         classified = road_hierarchy[:proj.height, :proj.width]
         weight[classified > 0] = classified[classified > 0]
+    if areas is not None:
+        yards = areas.mask(YARD_AREAS, weight.shape[1], weight.shape[0])
+        if classified is not None:
+            yards = yards & (classified == 0)
+        weight[yards] = 0
     return weight
 
 
@@ -1401,7 +1476,7 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # into the same cell layers, so where two cover a square only one survives.
     lots = np.zeros((proj.height, proj.width), dtype=bool)
     # Knox County roads: every building upright, and stood clear of the roads.
-    road_weight = _road_weight(out_dir, map_name, proj, road_hierarchy)
+    road_weight = _road_weight(out_dir, map_name, proj, road_hierarchy, areas)
 
     # Biggest footprints claim their tiles first. Where two real buildings
     # share a wall, one of them has to give up that row of tiles, and it should

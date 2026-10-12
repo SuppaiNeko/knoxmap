@@ -26,7 +26,7 @@ import knoxstop
 
 from . import pz_colors as C
 from . import structures
-from .osm import (FENCE_BARRIERS, OSMFeature, ROAD_HIERARCHY_BY_CODE,
+from .osm import (FENCE_BARRIERS, GATE_BARRIERS, OSMFeature, ROAD_HIERARCHY_BY_CODE,
                   ROAD_HIERARCHY_CODES,
                   classify, road_hierarchy)
 
@@ -746,6 +746,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
            output_dir: str, map_name: str,
            spawn_density: int = 10,
            tree_density: float = 1.0,
+           forest_density: float = 1.0,
            rotation: float = 0.0,
            osm_cache: str | None = None,
            osm_bbox: tuple[float, float, float, float] | None = None,
@@ -774,6 +775,7 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     building_feats: list[OSMFeature] = []
     indoor_feats: list[OSMFeature] = []
     fence_feats: list[OSMFeature] = []
+    gate_feats: list[OSMFeature] = []
     place_feats: list[OSMFeature] = []
     monument_feats: list[OSMFeature] = []
     for feat in features:
@@ -785,6 +787,8 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
             continue
         if structures.monument_kind(feat.tags):
             monument_feats.append(feat)
+        if feat.kind == "node" and feat.tags.get("barrier") in GATE_BARRIERS:
+            gate_feats.append(feat)
         if feat.kind == "node" and "natural" not in feat.tags:
             continue      # shops and cafes inside buildings: knoxbuild/uses.py
         # Rooms a mapper drew inside a building. classify() has no colour for
@@ -901,8 +905,10 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     _weather_roads(landscape, proj)
 
     knoxstop.check(should_stop, "the terrain")
+    # The woods the mapper drew take both dials; the gardens and the scrub
+    # over open ground take the overall one only.
     _paint_vegetation(vegetation, landscape, vegetation_feats, proj,
-                      density=tree_density)
+                      density=tree_density * forest_density)
     _paint_gardens(vegetation, landscape, building_feats, proj, density=tree_density)
     _paint_wild_growth(vegetation, landscape, proj, density=tree_density)
     _clear_building_vegetation(vegetation, building_feats, proj)
@@ -957,6 +963,9 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     with open(os.path.join(output_dir, f"{map_name}_fences.geojson"), "w", encoding="utf-8") as f:
         json.dump(_lines_geojson([f for f in fence_feats
                                   if clip is None or _inside(f, proj, clip)]), f)
+    with open(os.path.join(output_dir, f"{map_name}_fence_openings.geojson"), "w",
+              encoding="utf-8") as f:
+        json.dump(_openings_geojson(gate_feats, buckets), f)
     with open(os.path.join(output_dir, f"{map_name}_structures.json"), "w", encoding="utf-8") as f:
         json.dump({"bridges": lifted.bridges, "monuments": lifted.monuments,
                    "tiles": lifted.rows()}, f)
@@ -2084,6 +2093,40 @@ def _lines_geojson(feats: list[OSMFeature]) -> dict:
             "geometry": {"type": "LineString",
                          "coordinates": [[lon, lat] for lat, lon in f.geometry]},
         })
+    return {"type": "FeatureCollection", "features": features}
+
+
+# Ways people walk through a fence on: the path to the playing field, the
+# track to the yard. A fence drawn across one is drawn with a gap.
+OPENING_PATHS = {"paved_path", "dirt_path", "pedestrian"}
+
+
+def _openings_geojson(gates: list[OSMFeature], buckets: dict) -> dict:
+    """Where a fence should have a way through it: gates, and the paths that
+    cross one. The crossing itself is worked out where the fence is built
+    (knoxbuild/fences.py), which is the only place that knows where the line
+    ended up on the grid."""
+    features = []
+    for f in gates:
+        if not f.geometry:
+            continue
+        lat, lon = f.geometry[0]
+        features.append({
+            "type": "Feature",
+            "properties": {"opening": "gate",
+                           "barrier": f.tags.get("barrier") or "gate"},
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+        })
+    for cat in sorted(OPENING_PATHS):
+        for f in buckets.get(cat, ()):
+            if f.kind != "way" or len(f.geometry) < 2 or _is_polygon(f):
+                continue
+            features.append({
+                "type": "Feature",
+                "properties": {"opening": "path", "category": cat},
+                "geometry": {"type": "LineString",
+                             "coordinates": [[lon, lat] for lat, lon in f.geometry]},
+            })
     return {"type": "FeatureCollection", "features": features}
 
 

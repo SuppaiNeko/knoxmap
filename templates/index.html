@@ -139,12 +139,23 @@
         <p class="hint">Share an area and its settings. Imported presets can be saved here or generated directly.</p>
         <div id="presetNote" class="hint"></div>
       </details>
+      <!-- The corners of the area. They report what was drawn, and they are
+           also a way to draw it: type four degrees and the box appears,
+           which is how somebody who knows exactly where their map ends
+           starts from the numbers instead of the mouse. -->
       <div class="coords">
-        <label>S <input type="number" step="0.000001" id="south" readonly></label>
-        <label>W <input type="number" step="0.000001" id="west"  readonly></label>
-        <label>N <input type="number" step="0.000001" id="north" readonly></label>
-        <label>E <input type="number" step="0.000001" id="east"  readonly></label>
+        <label>S <input type="number" step="0.000001" id="south"
+                        placeholder="-90 to 90"></label>
+        <label>W <input type="number" step="0.000001" id="west"
+                        placeholder="-180 to 180"></label>
+        <label>N <input type="number" step="0.000001" id="north"
+                        placeholder="-90 to 90"></label>
+        <label>E <input type="number" step="0.000001" id="east"
+                        placeholder="-180 to 180"></label>
+        <button type="button" id="coordsApply" class="btn btn-small">Use these
+          corners</button>
       </div>
+      <div id="coordsNote" class="hint"></div>
       <div id="area-stats" class="empty">
         <div class="empty-state">Nothing selected yet.</div>
       </div>
@@ -159,13 +170,14 @@
       <label class="field">Map name
         <input type="text" id="mapName" value="" placeholder="leave blank for an automatic name"/>
       </label>
-      <label class="field">Scale (whole metres per tile)
+      <label class="field">Scale (metres per tile)
         <input type="number" id="metersPerTile" list="metersPerTileOptions"
-               value="1" min="0.5" max="100" step="any" inputmode="decimal"
-               title="Type a whole number, or 0.5 for twice the detail on a small area. 1 is recommended; 1 to 8 is the usual range."/>
+               value="1" min="0.5" max="100" step="0.25" inputmode="decimal"
+               title="Metres of the real place in one game tile, to the quarter metre. 1 is recommended; 1 to 8 is the usual range. 0.5 doubles the detail on a small area, and 1.5 is the middle ground between a town at full size and one at half."/>
         <datalist id="metersPerTileOptions">
           <option value="0.5" label="0.5 m per tile (small areas, twice the detail)"></option>
           <option value="1" label="1 m per tile (recommended)"></option>
+          <option value="1.5" label="1.5 m per tile (two thirds the size)"></option>
           <option value="2" label="2 m per tile"></option>
           <option value="3" label="3 m per tile"></option>
           <option value="4" label="4 m per tile"></option>
@@ -190,6 +202,8 @@
 
       <details id="advanced">
         <summary>More settings</summary>
+        <input type="search" id="settingFind" class="list-search" hidden
+               autocomplete="off" placeholder="Search the settings">
         <div id="advanced-body">
           <!-- Filled from /api/settings so the page never holds a second,
                drifting copy of the limits. -->
@@ -233,6 +247,8 @@
         <p class="hint">Pick what to draw, then draw it on the map. It is built
           exactly as a surveyed one would be - a street gets its pavement,
           kerbs and parked cars; a house gets rooms, loot and people.</p>
+        <input type="search" id="sketchFind" class="list-search" hidden
+               autocomplete="off" placeholder="Search what to draw">
         <div id="sketchPalette" class="sketch-palette"></div>
         <label class="check"><input type="checkbox" id="drawnOnly">
           Only what I draw <span class="hint">- nothing is downloaded, so a
@@ -254,7 +270,11 @@
           <button type="button" id="zoneDraw" class="btn">Draw a zone</button>
           <button type="button" id="zoneSave" class="btn" disabled>Save zones</button>
         </div>
+        <input type="search" id="zoneFind" class="list-search" hidden
+               autocomplete="off" placeholder="Search the zones">
         <ul id="zoneList" class="zone-list"></ul>
+        <input type="search" id="zoneSettingFind" class="list-search" hidden
+               autocomplete="off" placeholder="Search this zone's settings">
         <div id="zoneEditor" class="zone-editor" hidden></div>
         <div id="zoneNote" class="hint"></div>
       </details>
@@ -270,6 +290,8 @@
         </div>
         <p class="hint">Use hand-built buildings for:</p>
         <div id="builtKinds" class="sketch-palette"></div>
+        <input type="search" id="builtFind" class="list-search" hidden
+               autocomplete="off" placeholder="Search the hand-built buildings">
         <ul id="builtList" class="zone-list"></ul>
         <div id="builtNote" class="hint"></div>
       </details>
@@ -379,6 +401,45 @@
           <label>Name in game <input type="text" id="mapTitle"/></label>
           <label>Mod id <input type="text" id="modId"/></label>
         </div>
+        <!-- Where the map stands in the world every installed map shares.
+             Picked here rather than packed in automatically
+             (knoxbuild/placement.py). -->
+        <details id="placePanel">
+          <summary>Where it goes on the world map
+            <span class="count" id="placeWhere"></span></summary>
+          <p class="hint">Knox County sits in the corner of the world, and
+            every map you install shares that grid. Click to put yours
+            somewhere else - north of the vanilla map, far out on its own, or
+            right beside another of your own towns.</p>
+          <canvas id="placeCanvas" width="720" height="470"
+                  aria-label="The world, with Knox County and your map on it"></canvas>
+          <div class="place-row">
+            <label>Cell <input type="number" id="placeX" min="0" max="400">
+              , <input type="number" id="placeY" min="0" max="400"></label>
+            <button type="button" id="placeApply" class="btn btn-small">Put it
+              here</button>
+            <button type="button" id="placeAuto" class="btn btn-small">Place it
+              for me</button>
+          </div>
+          <!-- Two maps in one world have empty grid between them. A road drawn
+               across it becomes a map of its own, built and compiled like any
+               other, and the game joins them up. -->
+          <div class="place-row">
+            <button type="button" id="placeRoad" class="btn btn-small">Draw a
+              road</button>
+            <select id="placeRoadKind">
+              <option value="primary">Main road</option>
+              <option value="secondary">Through road</option>
+              <option value="residential">Street</option>
+              <option value="track">Dirt track</option>
+            </select>
+            <button type="button" id="placeRoadUndo" class="btn btn-small"
+                    disabled>Undo point</button>
+            <button type="button" id="placeLink" class="btn btn-small" disabled>
+              Make the road map</button>
+          </div>
+          <div id="placeNote" class="hint"></div>
+        </details>
         <span id="installNote" class="step-note">Copies the map into your Zomboid mods folder.</span>
       </div>
       <button id="installBtn" class="btn" disabled>Install</button>
@@ -408,6 +469,12 @@
       <input type="text" id="boardName" placeholder="my_town" size="12"></label>
     <span class="board-spacer"></span>
     <span id="boardCount" class="hint"></span>
+    <button type="button" id="boardTrace" class="btn">Background image</button>
+    <input id="boardTraceFile" type="file" accept="image/*" hidden>
+    <label class="board-size" id="boardTraceFade" hidden>Fade
+      <input type="range" id="boardTraceOpacity" min="0.1" max="1" step="0.05"
+             value="0.55"></label>
+    <button type="button" id="boardTraceOff" class="btn" hidden>Remove image</button>
     <button type="button" id="boardUndo" class="btn">Undo</button>
     <button type="button" id="boardClear" class="btn">Clear</button>
     <button type="button" id="boardSave" class="btn">Save</button>
@@ -418,6 +485,8 @@
     <aside class="board-tools">
       <p class="hint">Click a tool, then click on the sheet to draw.
         Double-click to finish a line or a shape.</p>
+      <input type="search" id="boardFind" class="list-search" hidden
+             autocomplete="off" placeholder="Search what to draw">
       <div id="boardPalette" class="sketch-palette"></div>
       <div id="boardPicked" class="edit-selected" hidden></div>
       <p class="hint" id="boardNote"></p>
@@ -455,7 +524,10 @@
     <aside class="board-tools">
       <p class="hint">Pick a room, then drag across the plan to draw it.
         Drawing over a room takes that much of it away; the eraser cuts the
-        shape of the building.</p>
+        shape of the building. To change a room you have already drawn, take
+        the adjust tool and drag its edge.</p>
+      <input type="search" id="bdFind" class="list-search" hidden
+             autocomplete="off" placeholder="Search the rooms">
       <div id="bdRooms" class="sketch-palette"></div>
     </aside>
     <div class="builder-sheet">

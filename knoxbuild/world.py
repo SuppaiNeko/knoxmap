@@ -101,19 +101,29 @@ def _installed_boxes() -> list[tuple[int, int, int, int]]:
     return boxes
 
 
-def choose_origin(out_dir: str, cells_x: int, cells_y: int) -> tuple[int, int]:
+def choose_origin(out_dir: str, cells_x: int, cells_y: int,
+                  keep_place: bool = True) -> tuple[int, int]:
     """A run of free cells for this map, keeping the one it already has.
 
     A map that has been built before keeps its place, so rebuilding it does
-    not move a town out from under anybody's save.
+    not move a town out from under anybody's save. `keep_place` off is the
+    answer to "where would this map go if it had never been placed", which is
+    what handing the choice back to the app has to mean.
     """
     import os
 
     here = os.path.abspath(out_dir)
     name = os.path.basename(here.rstrip(os.sep))
-    mine = _project_box(os.path.join(here, f"{name}.pzw"))
-    if mine:
-        return mine[0], mine[1]
+    if keep_place:
+        # Somewhere the mapper picked themselves beats anything worked out
+        # here: where a town sits is theirs to decide (knoxbuild/placement.py).
+        from .placement import saved
+        chosen = saved(here)
+        if chosen:
+            return chosen
+        mine = _project_box(os.path.join(here, f"{name}.pzw"))
+        if mine:
+            return mine[0], mine[1]
 
     # Only what is installed holds a place. Every generation makes a new
     # output folder, and those used to claim their cells for good: the tenth

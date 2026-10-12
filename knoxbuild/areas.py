@@ -91,6 +91,22 @@ class AreaIndex:
             return "civic"
         return kind
 
+    def mask(self, categories: set[str], width: int, height: int):
+        """These areas as a bitmap of the map, for asking about ground rather
+        than about one point. Nothing drawn is an empty mask, not no mask."""
+        import numpy as np
+        from PIL import Image, ImageDraw
+
+        sheet = Image.new("1", (width, height), 0)
+        pen = ImageDraw.Draw(sheet)
+        for shape, props in self._items:
+            if props.get("category") not in categories:
+                continue
+            ring = [(float(x), float(y)) for x, y in shape.exterior.coords]
+            if len(ring) >= 3:
+                pen.polygon(ring, fill=1)
+        return np.asarray(sheet, dtype=bool)
+
     def category_at(self, x: float, y: float) -> str | None:
         props = self.around(x, y)
         return props.get("category") if props else None

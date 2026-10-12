@@ -35,6 +35,25 @@ SIMPLIFY_TILES = 3.0
 HOLD = 0.02
 # How far, in tiles, the rest of the town feels a road's move.
 BLEND_TILES = 30
+# How far straightening may drag a point from where the survey put it. The fit
+# on its own has no such limit, and on a big town it used it: a main road at a
+# slight angle straightened by moving its far end a couple of blocks, which
+# left the road beyond it cut off, and streets on the other side of town ended
+# up across the road they used to run beside. Anything that wants to move
+# further than this is pinned where it really is and the fit is run again, so
+# the straightening gives way rather than the map.
+MAX_MOVE_TILES = 24.0
+# The hold on a point that has been pinned: large enough that the stretches
+# pulling on it cannot drag it anywhere.
+PINNED_HOLD = 50.0
+# A closed loop smaller than this across is a roundabout, whatever it is
+# tagged. Fitting one to the eight directions turned it into a few crossed
+# triangles; it is left exactly as it is instead, with its junctions pinned so
+# every road still meets it.
+ROUNDABOUT_TILES = 60.0
+# How far apart the points of one straight run may be across it and still be
+# rounded onto the same row, column or diagonal.
+ROUND_SPREAD = 2.0
 FIELD_CELL = 4                  # tiles per cell of the displacement field
 DIRECTIONS = [(1.0, 0.0), (math.sqrt(.5), math.sqrt(.5)), (0.0, 1.0),
               (-math.sqrt(.5), math.sqrt(.5))]
@@ -101,8 +120,35 @@ def _tidy(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return out
 
 
+def _rigid(f, px: list) -> bool:
+    """Whether this road is left exactly as it was drawn: a roundabout, or any
+    small closed loop, which has no straight sides to fit."""
+    if (f.tags.get("junction") or "").lower() in {"roundabout", "circular"}:
+        return True
+    if len(px) < 4 or math.dist(px[0], px[-1]) > 1e-6:
+        return False
+    xs = [x for x, _ in px]
+    ys = [y for _, y in px]
+    return max(max(xs) - min(xs), max(ys) - min(ys)) <= ROUNDABOUT_TILES
+
+
+def _fit(p0: np.ndarray, segs: np.ndarray, normals: np.ndarray,
+         weights: np.ndarray, pinned: np.ndarray | None = None) -> np.ndarray:
+    """The points, straightened: once held firmly where they are, then again
+    held only loosely to that, which is what takes the last of the slant out."""
+    def holds(value: float) -> np.ndarray:
+        out = np.full((len(p0), 1), value)
+        if pinned is not None:
+            out[pinned] = PINNED_HOLD
+        return out
+
+    moved = _solve(p0, segs, normals, weights, hold=holds(HOLD))
+    return _solve(moved, segs, normals, weights, iterations=1500,
+                  hold=holds(HOLD / 50))
+
+
 def _solve(p0: np.ndarray, segs: np.ndarray, normals: np.ndarray,
-           weights: np.ndarray, iterations: int = 400, hold: float | None = None) -> np.ndarray:
+           weights: np.ndarray, iterations: int = 400, hold=None) -> np.ndarray:
     """Points as near p0 as they can be with every segment turned along its
     direction: minimise HOLD*|P - p0|^2 + sum w*(n . (P_j - P_i))^2, by
     conjugate gradients on the normal equations."""
@@ -180,8 +226,15 @@ def _round_together(moved: np.ndarray, segs: np.ndarray, normals: np.ndarray) ->
         for k in range(n):
             groups.setdefault(find(kind, k), []).append(values[k])
         mean = {g: round(sum(v) / len(v)) for g, v in groups.items()}
-        sizes = {g: len(v) for g, v in groups.items()}
-        return [mean[find(kind, k)] for k in range(n)], [sizes[find(kind, k)] > 1 for k in range(n)]
+        # Only where the run really did come out straight. A road the fit
+        # could not straighten - because straightening it would have dragged
+        # it off the map it is a model of - was still averaged onto one row
+        # here, which moved it bodily sideways and left the roads it met
+        # behind. That run keeps its own shape and is rounded point by point.
+        together = {g: len(v) > 1 and max(abs(x - mean[g]) for x in v) <= ROUND_SPREAD
+                    for g, v in groups.items()}
+        return ([mean[find(kind, k)] for k in range(n)],
+                [together[find(kind, k)] for k in range(n)])
 
     xs, ys = moved[:, 0], moved[:, 1]
     row, in_row = shared("row", ys)
@@ -235,9 +288,11 @@ def straighten_roads(features: list, proj, classify, is_polygon) -> int:
             junction[key] = len(points) - 1
         return len(points) - 1
 
+    rigid: list[bool] = []            # roads left exactly as they were drawn
     for f in roads:
         px = [proj.to_px(lat, lon) for lat, lon in f.geometry]
         road_px.append(px)
+        rigid.append(_rigid(f, px))
         keys = [_key(lat, lon) for lat, lon in f.geometry]
         cuts = [n for n, k in enumerate(keys) if n in (0, len(keys) - 1) or uses[k] >= 2]
         verts = [vertex(px[0], keys[0])]
@@ -249,8 +304,14 @@ def straighten_roads(features: list, proj, classify, is_polygon) -> int:
         road_vertices.append(verts)
 
     p0 = np.array(points, dtype=float)
+    pinned = np.zeros(len(points), dtype=bool)
     segs, normals, weights = [], [], []
-    for verts in road_vertices:
+    for held, verts in zip(rigid, road_vertices):
+        if held:
+            # A roundabout holds its own shape and its junctions, so the roads
+            # into it still meet it; nothing turns it to the eight directions.
+            pinned[verts] = True
+            continue
         for a, b in zip(verts, verts[1:]):
             if a == b:
                 continue
@@ -268,15 +329,22 @@ def straighten_roads(features: list, proj, classify, is_polygon) -> int:
     if not segs:
         return 0
     segs, normals, weights = np.array(segs), np.array(normals), np.array(weights)
-    moved = _solve(p0, segs, normals, weights)
-    # Then held only to where that put them, far more loosely: what is left
-    # of each stretch's slant goes, and a straight road is straight to the
-    # tile rather than jogging one sideways every so often.
-    moved = _solve(moved, segs, normals, weights, iterations=1500, hold=HOLD / 50)
+    moved = _fit(p0, segs, normals, weights, pinned)
+    # Nothing may be dragged a block from where the survey put it. Whatever
+    # wanted to be is pinned and the fit run again - the roads around it take
+    # up the slack, and the ones that cannot simply stay as they were drawn.
+    for _ in range(4):
+        far = np.hypot(*(moved - p0).T) > MAX_MOVE_TILES
+        if not (far & ~pinned).any():
+            break
+        pinned |= far
+        moved = _fit(p0, segs, normals, weights, pinned)
 
     # --- the roads, from the moved points ---------------------------------
     snapped = _round_together(moved, segs, normals)
-    for f, verts in zip(roads, road_vertices):
+    for f, held, verts in zip(roads, rigid, road_vertices):
+        if held:
+            continue
         path = [snapped[verts[0]]]
         for v in verts[1:]:
             path += _legs(path[-1], snapped[v])
@@ -289,7 +357,9 @@ def straighten_roads(features: list, proj, classify, is_polygon) -> int:
     weight = np.zeros((gh, gw))
     shift = np.zeros((gh, gw, 2))
     disp = moved - p0
-    for verts, px in zip(road_vertices, road_px):
+    for held, verts, px in zip(rigid, road_vertices, road_px):
+        if held:
+            continue
         # Sample along each stretch, the move blended between its ends.
         for a, b in zip(verts, verts[1:]):
             pa, pb = p0[a], p0[b]

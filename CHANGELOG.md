@@ -1,5 +1,185 @@
 # Changelog
 
+## 1.7.3
+
+- **Put your map where you want it on the world map** (`knoxbuild/placement.py`,
+  new; `knoxbuild/world.py`, `app.py`, `static/js/app.js`,
+  `templates/index.html`, `static/css/app.css`). Project Zomboid holds one
+  grid for every map installed, with Knox County in the corner of it. A
+  generated map was dropped east of the vanilla map and east again of any
+  other KnoxMap map already installed, which keeps maps off each other and
+  left nobody any say in it: whether your town is north of Louisville or two
+  counties west, whether two of your own maps sit side by side as one sprawl
+  or at opposite ends of the world.
+
+  The Install step now draws that world - Knox County, every map already
+  installed, and yours - and you click where yours goes. A place that would
+  sit on top of the vanilla map or another of your maps is called out before
+  anything is written, because that is the one mistake the game cannot
+  survive: it reads one map's cells with another's data and falls over on the
+  way in.
+
+  Moving a map that is already built rewrites only what carries the world
+  origin - the project file, the paper map's cell numbers, the street lines
+  and the labels - and leaves the buildings, the ground and the zombies
+  alone, which are all drawn relative to the map's own corner. Those rewrites
+  are byte-exact: moving a map away and back gives the file that was there,
+  to the byte. The compiled cells are named for where they land, so a map
+  that moves has to be compiled again; the window says so, and Install
+  refuses until it is, rather than shipping cells named for one place and a
+  paper map pointing at another.
+
+  "Place it for me" hands the choice back and puts the map where it would
+  have been packed in.
+
+  The world is drawn as it really is, not as boxes. Knox County is the game's
+  own picture of it - the river, the farms, Louisville in the corner - read
+  out of the tile pyramid the game ships beside the map (`pyramid.zip`, whose
+  `bounds` say which world tiles it covers, so it lands exactly where the map
+  really is) and assembled into the app's cache the first time it is asked
+  for. Your own map is the preview it came out as, in its place beside it, and
+  a map with no picture of its own is drawn cell by cell from its compiled
+  files - 4,065 of them for Knox County, with bites out of the shape rather
+  than a rectangle.
+
+  Nothing of the game is copied anywhere: the picture is read from the
+  player's own install, kept in their own cache, and shown in their own
+  window.
+
+- **Draw a road from one map to the next** (`static/js/app.js`,
+  `templates/index.html`). Two maps in one world have empty grid between them:
+  no ground, no road, nothing to drive along. Draw a line across the gap and
+  it becomes a map of its own - a strip of ground with that road down it,
+  pinned to the cells it crosses - built, compiled and installed by the same
+  steps as any other map, and the game joins the three of them into one world.
+
+  The strip is trimmed back out of every map it crosses before it is built,
+  because two maps may not share a cell: whichever the game reads second wins
+  and the other's ground is simply not there. The road itself is cut to the
+  strip rather than squashed onto its edge, so it meets the edge where it was
+  drawn to - which is what lets it line up with the road on the other side.
+  Between two KnoxMap maps, both placed on the same grid, it meets them
+  exactly; against the vanilla map, whose cells are 256 tiles against this
+  grid's 300, it stops a little short.
+
+- **A zone says which it is when the pointer is on it** (`static/js/app.js`,
+  `static/css/app.css`). Every zone is drawn in the same purple, which left
+  four of them on one town impossible to tell apart. The one under the pointer
+  now lights up and names itself, with what it sets differently underneath;
+  the label follows the pointer, so where zones overlap it names the one it is
+  really over. Hovering a zone in the list lights it up on the map the same
+  way, which is how you find where a zone in the list actually is.
+
+- **A search box on every long list** (`static/js/app.js`,
+  `templates/index.html`, `static/css/app.css`). The zones a map carries, the
+  settings of the one picked, the twenty-six settings on the page, the
+  sixty-three things there are to draw, the hundred and thirteen rooms a
+  building can be made of and the hand-built buildings themselves: each
+  narrows to what matches as it is typed. A line is found by what it says, by
+  the OpenStreetMap tags in its tooltip - "amenity=fuel" finds the petrol
+  station - and, for a zone setting, by the name the generator knows it by.
+
+  Nothing is removed, only hidden, so emptying the box puts the list back as
+  it was, and a heading with nothing left under it goes with its things. The
+  box only appears once a list is long enough to be worth searching, so a map
+  with two zones looks exactly as it did.
+
+- **Eight things reported in #bug-reports** (`knoxbuild/build.py`,
+  `knoxbuild/areas.py`, `knoxbuild/fences.py`, `knoxbuild/designer.py`,
+  `knoxbuild/layout.py`, `generator/octilinear.py`, `generator/osm.py`,
+  `generator/renderer.py`, `static/js/app.js`, `templates/index.html`).
+
+  **An industrial estate is ground a building can stand on.** The renderer
+  paints a works' yard in the game's beige gravel, which is the colour it
+  paints a track bed; the placer read that colour as road and refused every
+  footprint inside the estate, so a town's industrial end came out as empty
+  gravel in the exact shape of the landuse polygon. Where the land use is
+  what made the ground look like that, and no road runs over it, it is free
+  ground again. Car parks are left as they were.
+
+  **A fence is as tall as OSM says it is.** The height tag was never read, so
+  two-metre metal bars came out as the waist-high railing. Each fence now
+  picks the short or the tall version of itself from its height, including
+  the full-height black bars the game has and this never used.
+
+  **A gate is a gate and a footpath is a way through.** Gate nodes are
+  downloaded now, and a fence opens where one sits on it - with the game's
+  gate hung there where that fence has one, a hole where it has not - and
+  where a footpath or a track crosses it. Before, the fence was built from
+  the line alone and walled off the way in.
+
+  **Straightening roads knows when to stop.** The fit had no limit on how far
+  it could drag the town: a main road at a slight angle straightened by
+  moving its far end a couple of blocks, which cut the road beyond it off and
+  pushed streets across the one they used to run beside, and at the coast it
+  put blocks in the water. Nothing is moved more than 24 tiles from where the
+  survey put it; a run that has to move further stays as it was drawn.
+  Roundabouts are left exactly alone - fitted to the eight directions they
+  came out as crossed triangles - with their junctions pinned so every road
+  still meets them.
+
+  **A door on the shore faces the land.** A building with no street near it
+  put its door on the south wall, which for a hut on a pier is the lake.
+
+  **The stairs in a hand-drawn building go at the edge of a room.** The
+  generator puts its stair shaft in the middle of the floor, which over a
+  drawing meant the middle of a drawn room: a 6x6 room on two storeys came
+  back as two rooms and a smaller one came back as the staircase and nothing
+  else. The shaft now takes the least it can out of what was drawn, and a
+  drawing with no room for stairs is built as one storey instead of losing
+  the room.
+
+  **Rooms already drawn can be adjusted.** A new tool in the building editor:
+  drag a room's edge to move that wall, its middle to move the room. Redrawing
+  a rectangle over one was the only way before, and the redraw ate whatever
+  it crossed.
+
+  **No two rooms are offered under the same name.** The editor's list had
+  "Living Room" twice, and four other pairs.
+
+- **Five things people asked for** (`app.py`, `knoxbuild/settings.py`,
+  `knoxbuild/build.py`, `generator/renderer.py`, `generator/places.py`,
+  `static/js/app.js`, `templates/index.html`, `static/css/app.css`), from the
+  suggestions channel.
+
+  **Scales between the whole metres.** 1 m a tile is a town at its real size
+  and 2 m is everything in it half that, with nothing in between; the scale is
+  kept to quarter metres now, so 1.25, 1.5 and 1.75 are there to tune a map
+  with. Everything downstream already measured in metres per tile.
+
+  **An area typed instead of drawn.** The four corner boxes were a readout of
+  whatever was on the map. Type four degrees - a county line, coordinates out
+  of another tool - and press Enter or Use these corners, and the area is
+  drawn between them. A box the wrong way round is said plainly rather than
+  quietly swapped.
+
+  **Height mix.** How tall the buildings OpenStreetMap says nothing about come
+  out: as the place is (what it has always done - the kind of building and its
+  footprint decide), mostly low, mostly middling, mostly tall, or every height
+  equally. A building whose floors a mapper counted keeps them whatever this
+  says, which is the point: it fills in blanks rather than overruling the
+  survey. Measured over 3,000 buildings of each kind, "low" turns a town of
+  76% single-storey houses into 93%, and "tall" into 58%; "middling" gathers
+  69% of a pool on its centre where the generator's own guess leaves 50%.
+
+  **A dial for the woods.** Woodland scaled the mapped woods, the trees in
+  gardens and the scrub over open ground together. Forests now scales the
+  woods the mapper drew on top of it, so a thickly wooded map round a thinly
+  planted town is one setting apart. At 0 the mapped woods go and the lone
+  trees stay; at 2 the thinned edges of a wood fill in.
+
+  **A picture to trace on the drawing board.** The board has no world map
+  under it, which is the point of it and also means there is nothing to go by.
+  Lay a screenshot, a town plan or a sketch over the sheet, fade it, and draw
+  on top. It stays in the window: nothing is uploaded, and what gets built is
+  what was drawn over it.
+
+  Also: no one kind of place can take a list of landmarks any more. A town of
+  forty churches spent a quarter of its list on them and pushed out the one
+  theatre and the one graveyard; each kind now takes at most a share before
+  anything gets seconds, and the list holds 600 rather than 300. Of 100 slots
+  in a town of 400 churches, every other kind of place is now in the list.
+
 ## 1.7.2
 
 - **The Rust compiler is checked at 51 x 48 cells** (`tools/large_compile_check.py`).

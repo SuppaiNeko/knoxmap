@@ -150,8 +150,15 @@ class QueryFilters(unittest.TestCase):
     def test_fetches_entrance_nodes(self):
         self.assertIn('node["entrance"]', osm.OVERPASS_FILTERS)
         self.assertIn('node["entrance"]', osm._build_query(*BOX))
-        # 13: the indoor=room filter (real interiors) joined the list.
-        self.assertEqual(osm.FILTERS_VERSION, 13)
+        # 14: gate nodes, so a fence has a way through it.
+        self.assertEqual(osm.FILTERS_VERSION, 14)
+
+    def test_fetches_the_gates_on_a_fence(self):
+        # A fence is drawn as one line with the gate as a node on it, so
+        # without these every drive and footpath through a fence was walled.
+        self.assertIn('node["barrier"~"^(gate|lift_gate|swing_gate|kissing_gate|'
+                      'cattle_grid|stile|entrance|bollard)$"]', osm.OVERPASS_FILTERS)
+        self.assertIn('"barrier"~', osm._build_query(*BOX))
 
     def test_fetches_mapped_rooms(self):
         self.assertIn('way["indoor"~"^(room|corridor)$"]', osm.OVERPASS_FILTERS)

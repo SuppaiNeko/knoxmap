@@ -186,7 +186,11 @@ input[readonly] { background: var(--bg); color: var(--muted); }
 /* ---- area panel ------------------------------------------------------------------ */
 .coords { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
 .coords label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
-.coords input { font-family: var(--mono); font-size: 12px; padding: 3px 5px; }
+.coords input { font-family: var(--mono); font-size: 12px; padding: 3px 5px;
+  min-width: 0; }
+/* The button that turns four typed degrees into the area, across both
+   columns under them. */
+.coords #coordsApply { grid-column: 1 / -1; width: 100%; }
 .empty-state { color: var(--muted); font-size: 13px; }
 
 .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
@@ -435,6 +439,18 @@ summary .count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .shots a:hover { border-color: var(--accent, #8ce65a); }
 
 /* ---- drawing a map by hand ------------------------------------------- */
+/* A box that narrows a long list to what matches, wherever one is long
+   enough to be worth it. Hidden things keep their place in the list: it is
+   the same list with less of it showing. */
+.list-search { width: 100%; margin: 8px 0 4px; padding: 5px 8px;
+  font: inherit; font-size: 12px; color: var(--text); background: var(--field);
+  border: 1px solid var(--line-strong); border-radius: 4px; }
+.list-search::placeholder { color: var(--faint); }
+.list-search:focus { outline: none; border-color: var(--accent); }
+.list-search.found-nothing { border-color: var(--warn); color: var(--warn); }
+.list-search[hidden] { display: none; }
+.out-of-search { display: none !important; }
+
 .sketch-palette { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
 .sketch-pick { display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
   font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 4px;
@@ -564,6 +580,10 @@ summary .count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .zone-list button { font: inherit; font-size: 11px; cursor: pointer;
   color: var(--text); background: transparent; border: 1px solid var(--line-strong);
   border-radius: 3px; padding: 1px 6px; }
+/* The label that names the zone under the pointer. */
+.zone-tip { font-size: 12px; }
+.zone-tip .zone-tip-what { color: var(--muted); font-size: 11px; }
+
 .zone-editor { margin-top: 8px; padding: 8px 10px; border-radius: 6px;
   border: 1px solid var(--line-strong); }
 .zone-editor[hidden] { display: none; }
@@ -580,3 +600,22 @@ summary .count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .zone-preset span { flex: 1 1 auto; color: var(--text); }
 .zone-preset small { color: var(--muted); font-size: 11px; }
 .zone-preset input { width: auto; }
+
+/* ---- where the map goes in the world ---------------------------------- */
+/* Knox County, whatever is installed, and this map, drawn as boxes on the
+   grid the game shares between every map. */
+#placePanel { margin: 8px 0; }
+#placePanel summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+#placeCanvas { display: block; width: 100%; height: auto; margin: 8px 0;
+  border: 1px solid var(--line-strong); border-radius: 4px;
+  background: #0d100c; cursor: crosshair; }
+.place-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.place-row label { font-size: 12px; color: var(--muted); }
+.place-row input { font-family: var(--mono); font-size: 12px; width: 5em;
+  padding: 3px 5px; }
+.place-row select { font: inherit; font-size: 12px; padding: 3px 5px;
+  color: var(--text); background: var(--field); flex: 0 0 auto; width: auto;
+  border: 1px solid var(--line-strong); border-radius: 4px; }
+.place-row .is-on { color: var(--accent-ink); background: var(--accent);
+  border-color: var(--accent); }
+#placeNote.bad { color: var(--bad); }

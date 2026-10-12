@@ -31,8 +31,62 @@ STYLES = {
     "white_picket": dict(west1=4, west2=4, north1=5, north2=5, nw=6, post=7),
     "cattle": dict(west1=20, west2=20, north1=21, north2=21, nw=18, post=19),
     "black_metal": dict(west1=2, west2=2, north1=1, north2=1, nw=3, post=0),
+    # The full-height bars of the Rosewood base wall. The game has both and
+    # OSM says which: metal bars two metres tall came out half that, because
+    # a fence's height was never read.
+    "tall_metal": dict(west1=67, west2=66, north1=64, north2=65, nw=68, post=69),
+    "short_picket": dict(west1=121, west2=121, north1=120, north2=120,
+                         nw=122, post=123),
     "tall_concrete": dict(west1=40, west2=40, north1=41, north2=41, nw=42, post=43),
 }
+
+# Which of a pair is the taller, and the height in metres at which a fence
+# becomes it. OSM fence heights are mostly 0.9 to 2.4; the game's short
+# fences are waist high and its tall ones are over your head.
+TALLER = {
+    "short_wooden": ("tall_wooden", 1.4),
+    "short_chainlink": ("tall_chainlink", 1.7),
+    "black_metal": ("tall_metal", 1.7),
+    "short_picket": ("white_picket", 1.0),
+}
+SHORTER = {tall: short for short, (tall, _m) in TALLER.items()}
+
+
+def height_m(tags: dict) -> float | None:
+    """A fence's height in metres, from however the mapper wrote it.
+
+    "2", "2 m", "2.5m" and "6'" all occur; anything else is no answer rather
+    than a guess.
+    """
+    raw = str(tags.get("height") or tags.get("est_height") or "").strip().lower()
+    if not raw:
+        return None
+    if "'" in raw or "ft" in raw:
+        feet = raw.replace("ft", "").split("'")[0].strip()
+        try:
+            return float(feet) * 0.3048
+        except ValueError:
+            return None
+    for suffix in (" m", "m", " metres", " meters"):
+        if raw.endswith(suffix):
+            raw = raw[: -len(suffix)].strip()
+            break
+    try:
+        metres = float(raw.replace(",", "."))
+    except ValueError:
+        return None
+    return metres if 0.2 <= metres <= 12.0 else None
+
+
+def by_height(style: str, metres: float | None) -> str:
+    """The same fence at the height the mapper gave it."""
+    if metres is None:
+        return style
+    short = SHORTER.get(style, style)
+    taller, at = TALLER.get(short, (None, 0.0))
+    if taller is None:
+        return style
+    return taller if metres >= at else short
 
 
 # Gates, for the fences drawn round back yards: (west-edge tile, north-edge tile).
@@ -41,6 +95,7 @@ GATES = {
     "tall_wooden": ("fixtures_doors_fences_01_012", "fixtures_doors_fences_01_013"),
     "white_picket": ("fixtures_doors_fences_01_008", "fixtures_doors_fences_01_009"),
     "short_chainlink": ("fixtures_doors_fences_01_016", "fixtures_doors_fences_01_017"),
+    "black_metal": ("fixtures_doors_fences_01_000", "fixtures_doors_fences_01_001"),
 }
 
 
@@ -66,29 +121,37 @@ def _fenced_sites(areas) -> list:
 
 
 def style_for(tags: dict, area: str | None) -> str:
-    """Which fence a line gets: from its own tags first, its surroundings next."""
+    """Which fence a line gets: from its own tags first, its surroundings next.
+
+    Where the mapper gave a height, that decides between the short and the
+    tall version of the fence they asked for - the game has both of most of
+    them, and two-metre metal bars used to come out as the waist-high railing.
+    """
     barrier = tags.get("barrier")
     if barrier in {"wall", "retaining_wall", "city_wall"}:
         return "tall_concrete"
+    metres = height_m(tags)
     kind = (tags.get("fence_type") or tags.get("material") or "").lower()
     if kind in {"chain_link", "chain", "mesh"}:
+        if metres is not None:
+            return by_height("short_chainlink", metres)
         return "tall_chainlink" if area in {"industrial", "military"} else "short_chainlink"
     if kind in {"wood", "wooden", "split_rail", "board", "panel"}:
-        return "tall_wooden"
+        return by_height("tall_wooden", metres)
     if kind in {"picket", "pales"}:
-        return "white_picket"
+        return by_height("white_picket", metres)
     if kind in {"metal", "railing", "metal_bars", "bars", "iron", "steel"}:
-        return "black_metal"
+        return by_height("black_metal", metres)
     if kind in {"barbed_wire", "electric", "wire"}:
         return "cattle"
     if kind in {"concrete", "brick", "stone", "masonry"}:
         return "tall_concrete"
-    return {
+    return by_height({
         "industrial": "tall_chainlink", "military": "tall_chainlink",
         "schoolyard": "short_chainlink", "sports": "short_chainlink",
         "residential": "tall_wooden", "cemetery": "black_metal",
         "worship_grounds": "black_metal", "hospital_grounds": "black_metal",
-    }.get(area or "", "short_wooden")
+    }.get(area or "", "short_wooden"), metres)
 
 
 def _grid_path(points: list[tuple[float, float]]) -> list[tuple[int, int]]:
@@ -141,6 +204,80 @@ def _tarmac_mask(bmp_path: str, width: int, height: int):
         same &= ground[:, :, 2] == colour[2]
         mask |= same
     return mask
+
+
+# How far either side of a gate or a crossing path the fence is looked at, in
+# tiles: the fence line and the node or path it meets rarely land on the same
+# tile once both are on the grid.
+OPENING_REACH = 1
+
+
+def _openings(out_dir: str, map_name: str, proj):
+    """Where people get through a fence: gate nodes, and the paths that cross
+    one. Points in tiles, with the paths as lines to be crossed with each
+    fence where it is built."""
+    path = os.path.join(out_dir, f"{map_name}_fence_openings.geojson")
+    if not os.path.exists(path):
+        return [], []
+    try:
+        with open(path, encoding="utf-8") as f:
+            feats = json.load(f).get("features", [])
+    except (OSError, ValueError):
+        return [], []
+    gates, paths = [], []
+    for feat in feats:
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates") or []
+        if geom.get("type") == "Point" and len(coords) == 2:
+            gates.append(proj.to_px(coords[1], coords[0]))
+        elif geom.get("type") == "LineString" and len(coords) >= 2:
+            paths.append([proj.to_px(lat, lon) for lon, lat in coords])
+    return gates, paths
+
+
+def _path_crossings(fence: list, paths) -> list:
+    """Where a footpath or a track crosses this fence, in tiles."""
+    if paths is None or len(fence) < 2:
+        return []
+    from shapely.geometry import LineString
+
+    try:
+        line = LineString(fence)
+        hit = line.intersection(paths)
+    except Exception:          # a fence that is not a line: nothing crosses it
+        return []
+    if hit.is_empty:
+        return []
+    out = []
+    for part in getattr(hit, "geoms", [hit]):
+        if part.geom_type == "Point":
+            out.append((part.x, part.y))
+        elif not part.is_empty:
+            middle = part.centroid
+            out.append((middle.x, middle.y))
+    return out
+
+
+def _way_through(openings: dict, gated: set, gates: dict,
+                 at: tuple[int, int], style: str) -> bool:
+    """Whether the fence is built on this tile at all.
+
+    True builds it as usual, False leaves a hole. A gate node hangs one gate
+    on the first tile of its opening the fence actually reaches and the fence
+    carries on either side of it, so a gate is a gate and not a gateway; a
+    fence the game has no gate for gets the hole instead.
+    """
+    mark = openings.get(at)
+    if mark is None:
+        return True
+    if mark:                                  # a gate the mapper put there
+        if style not in GATES:
+            return False                      # no gate for this fence: a gap
+        if mark not in gated:
+            gated.add(mark)
+            gates[at] = style                 # swapped for the gate below
+        return True
+    return False                              # a path through: a gap
 
 
 def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
@@ -210,7 +347,34 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
         todo.append((pts, style))
         for gx, gy in (item[2] if len(item) > 2 else ()):
             gates[(gx, gy)] = style
+
+    # A gate on the fence, or a footpath through it: the mapper drew the way
+    # in, and a fence built from the line alone stood across it. Each opening
+    # takes its tiles out of the fence; where the game has a gate for that
+    # fence, one of those tiles becomes the gate rather than a hole.
+    gate_points, path_lines = _openings(out_dir, map_name, proj)
+    paths = None
+    if path_lines:
+        from shapely.geometry import LineString
+        from shapely.ops import unary_union
+        paths = unary_union([LineString(line) for line in path_lines
+                             if len(line) >= 2])
+    openings: dict[tuple[int, int], int] = {}
+
+    def open_up(points, kind_gate: bool) -> None:
+        for px, py in points:
+            mark = len(openings) + 1 if kind_gate else 0
+            for dx in range(-OPENING_REACH, OPENING_REACH + 1):
+                for dy in range(-OPENING_REACH, OPENING_REACH + 1):
+                    key = (int(round(px)) + dx, int(round(py)) + dy)
+                    openings.setdefault(key, mark)
+
+    open_up(gate_points, True)
+    gated: set[int] = set()
+
     for pts, style in todo:
+        if paths is not None:
+            open_up(_path_crossings(pts, paths), False)
         walk = _grid_path(pts)
         for (x1, y1), (x2, y2) in zip(walk, walk[1:]):
             if y1 == y2:                      # along a north edge
@@ -222,6 +386,8 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
                     continue
                 if crossing(x, y1, x, y1 - 1):
                     continue
+                if not _way_through(openings, gated, gates, (x, y1), style):
+                    continue
                 edges.setdefault((x, y1), {})["N"] = style
             else:                             # along a west edge
                 y = min(y1, y2)
@@ -230,6 +396,8 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
                 if (x1, y) in clear or (x1 - 1, y) in clear:
                     continue
                 if crossing(x1, y, x1 - 1, y):
+                    continue
+                if not _way_through(openings, gated, gates, (x1, y), style):
                     continue
                 edges.setdefault((x1, y), {})["W"] = style
         if walk:

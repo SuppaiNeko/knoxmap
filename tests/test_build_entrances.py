@@ -77,5 +77,46 @@ class EntrancePointMapping(unittest.TestCase):
         self.assertTrue(set(party).isdisjoint(plan.doors))
 
 
+class TheSideAFrontDoorFaces(unittest.TestCase):
+    """A building with no street near it put its door on the south wall, which
+    for a hut on a pier is the lake. The way in is the side that is not
+    water."""
+
+    def ground(self, paint):
+        import os
+
+        from PIL import Image
+
+        from generator import pz_colors as C
+
+        directory = self.enterContext(TemporaryDirectory())
+        tiles = np.zeros((40, 40, 3), dtype=np.uint8)
+        tiles[:, :] = C.MEDIUM_GRASS
+        paint(tiles, C)
+        Image.fromarray(tiles).save(os.path.join(directory, "m.bmp"), format="BMP")
+        return build._street_finder(directory, "m")
+
+    def test_a_hut_at_the_water_has_its_door_on_the_landward_side(self):
+        side = self.ground(lambda tiles, C: tiles.__setitem__(
+            (slice(20, None), slice(None)), C.WATER))
+        self.assertEqual(side(10, 16, 6, 4), "N")
+
+    def test_a_hut_out_on_a_pier_faces_the_shore(self):
+        def paint(tiles, C):
+            tiles[:, :] = C.WATER
+            tiles[:, :8] = C.MEDIUM_GRASS
+        self.assertEqual(self.ground(paint)(12, 18, 4, 4), "W")
+
+    def test_inland_with_no_street_is_still_no_answer(self):
+        side = self.ground(lambda tiles, C: None)
+        self.assertIsNone(side(10, 2, 6, 4))
+
+    def test_a_street_is_still_what_decides_where_there_is_one(self):
+        def paint(tiles, C):
+            tiles[20:, :] = C.WATER
+            tiles[10:12, :] = C.MEDIUM_ASPHALT      # the road along the shore
+        self.assertEqual(self.ground(paint)(10, 16, 6, 4), "N")
+
+
 if __name__ == "__main__":
     unittest.main()

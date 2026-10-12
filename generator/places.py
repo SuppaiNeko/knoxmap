@@ -132,8 +132,18 @@ def _build_query(south: float, west: float, north: float, east: float,
     return f"[out:json][timeout:{timeout}];\n(\n  {body}\n);\nout center tags;\n"
 
 
+# How many landmarks a list holds, and how much of it any one kind of place
+# may take. A town with forty churches in it used to spend a quarter of the
+# list on them - they are ranked highly and there are a lot of them - and the
+# one theatre, the one market and the one graveyard were pushed out by the
+# cut. Each kind gets at most this share before anything is allowed seconds.
+LANDMARK_LIMIT = 600
+VALUE_SHARE = 0.08
+VALUE_MIN = 4
+
+
 def landmarks(south: float, west: float, north: float, east: float,
-              limit: int = 300) -> list[dict]:
+              limit: int = LANDMARK_LIMIT) -> list[dict]:
     """Named landmarks inside the bbox, most specific category first."""
     query = _build_query(south, west, north, east)
     last_err: Exception | None = None
@@ -198,10 +208,35 @@ def _parse(payload: dict, limit: int) -> list[dict]:
     # list and every museum, church and school - later in the alphabet - was
     # silently dropped.
     out.sort(key=lambda d: (-d["_rank"], d["value"], d["name"].lower()))
-    kept = out[:limit]
+    kept = _share_out(out, limit)
     for d in kept:
         del d["_rank"]
     kept.sort(key=lambda d: (d["value"], d["name"].lower()))
+    return kept
+
+
+def _share_out(ranked: list[dict], limit: int) -> list[dict]:
+    """The best `limit` landmarks, with no one kind of place taking the list.
+
+    Two passes down the ranking. The first takes each kind up to its share, so
+    the church, the school, the market and the theatre are all in before the
+    fortieth church; the second fills whatever is left over from what was
+    passed up, so a place that really is all churches still gets a full list
+    rather than a short one.
+    """
+    if len(ranked) <= limit:
+        return list(ranked)
+    share = max(VALUE_MIN, int(limit * VALUE_SHARE))
+    taken: dict[str, int] = {}
+    kept, spare = [], []
+    for item in ranked:
+        value = item["value"]
+        if len(kept) < limit and taken.get(value, 0) < share:
+            taken[value] = taken.get(value, 0) + 1
+            kept.append(item)
+        else:
+            spare.append(item)
+    kept.extend(spare[:max(0, limit - len(kept))])
     return kept
 
 

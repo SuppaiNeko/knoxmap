@@ -283,6 +283,11 @@ OVERPASS_FILTERS: Sequence[str] = (
     # Mapped building doors: carried into knoxbuild so the generated footprint
     # can put its exterior doors where people actually enter.
     'node["entrance"]',
+    # The way through a fence. A mapper draws the fence as one unbroken line
+    # and puts the gate in as a node on it, so a fence built from the line
+    # alone walls off the drive it was never meant to cross.
+    'node["barrier"~"^(gate|lift_gate|swing_gate|kissing_gate|cattle_grid|'
+    'stile|entrance|bollard)$"]',
     # Bases, armouries, barracks: mapped with military=* as often as with
     # landuse=military, and without these an armoury was somebody's house.
     'way["military"]',
@@ -296,7 +301,7 @@ OVERPASS_FILTERS: Sequence[str] = (
 
 # Bumped whenever the filters above change, so a cached download made with
 # the old list is fetched again instead of silently lacking the new features.
-FILTERS_VERSION = 13
+FILTERS_VERSION = 14
 
 
 @dataclass
@@ -932,6 +937,11 @@ def _parse(payload: dict) -> list[OSMFeature]:
 
 # Barrier kinds that become fences in game, as opposed to hedges.
 FENCE_BARRIERS = {"fence", "wall", "retaining_wall", "city_wall"}
+# What a mapper puts on a fence where people get through it. The fence line
+# runs straight past the node, so the fence is built with a hole or a gate
+# here instead of across the way in.
+GATE_BARRIERS = {"gate", "lift_gate", "swing_gate", "kissing_gate",
+                 "cattle_grid", "stile", "entrance"}
 
 SCHOOL_AMENITIES = {"school", "university", "college", "kindergarten"}
 

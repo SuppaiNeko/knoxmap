@@ -304,6 +304,20 @@ BIG_TILES_PER_SIDE = 20000     # 66 cells at 300 tiles each
 # said to be unusual.
 MIN_METERS_PER_TILE = 0.5
 MAX_METERS_PER_TILE = 100.0
+# Scales are kept to quarter metres. It used to be whole metres above one, on
+# the grounds that a tile is a metre in the game and anything between buys
+# nothing - but between 1 and 2 is exactly where it buys something: at 1 a
+# town is as big as it really is and at 2 everything in it is half the size,
+# and people asked for the steps in between to find the size they wanted. A
+# quarter is as fine as it goes, so a scale stays a number somebody can read
+# off a map folder rather than 1.0137.
+SCALE_STEP = 0.25
+
+
+def tidy_scale(metres: float) -> float:
+    """The nearest scale the map is really drawn at."""
+    stepped = round(metres / SCALE_STEP) * SCALE_STEP
+    return float(min(max(stepped, MIN_METERS_PER_TILE), MAX_METERS_PER_TILE))
 USUAL_METERS_PER_TILE = (1.0, 8.0)
 
 # Landmark lookup asks for far more tag keys than the terrain query, so it is
@@ -409,7 +423,8 @@ def index():
 # identity and cached nothing. Tiles now come through here: fetched only when
 # the map shows them, with KnoxMap's User-Agent, kept on disk and revalidated.
 TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-TILE_CACHE = BASE_DIR / "cache" / "tiles"
+CACHE_DIR = BASE_DIR / "cache"
+TILE_CACHE = CACHE_DIR / "tiles"
 TILE_MIN_AGE = 7 * 24 * 3600
 # How many tiles are fetched at once. A map view is twenty or thirty tiles,
 # and at two at a time they arrived in a slow ripple; a browser asking
@@ -718,7 +733,7 @@ BUILD_BASE_BYTES = 300e6
 # steps a change really needs. tests/test_render_settings.py checks it against
 # what generate() actually reads, so the two cannot drift apart.
 RENDER_SETTINGS = ["align_streets", "rotate_degrees", "straight_roads",
-                   "tree_density", "fill_gaps"]
+                   "tree_density", "forest_density", "fill_gaps"]
 
 
 def _too_big_for_memory(tiles_w: float, tiles_h: float,
@@ -793,11 +808,7 @@ def generate():
                                  f"{MAX_METERS_PER_TILE:g}."}), 400
     # Whole metres only: 1.5 would put every building, road and lot on a grid
     # that is not a multiple of the survey's own.
-    # Whole metres above one, and the half metre below it. A tile is a metre
-    # in the game, so a fractional scale buys nothing except at 0.5, where it
-    # doubles the detail on a small area - which is what it was there for.
-    meters_per_tile = (0.5 if meters_per_tile < 1.0
-                       else float(round(meters_per_tile)))
+    meters_per_tile = tidy_scale(meters_per_tile)
 
     # Nothing below refuses the map. These are what the window has already
     # warned about; they are logged here so a report from somebody whose map
@@ -977,6 +988,7 @@ def generate():
             map_name=map_name,
             spawn_density=settings.spawn_density,
             tree_density=settings.tree_density,
+            forest_density=settings.forest_density,
             rotation=rotation,
             osm_cache=osm_cache_name,
             osm_bbox=osm_bbox,
@@ -1896,7 +1908,7 @@ def _portable_preset(data: dict) -> tuple[dict | None, str | None]:
         kind = None
     return {"format": "knoxmap-preset", "version": 1, "name": name,
             "south": south, "west": west, "north": north, "east": east,
-            "metersPerTile": 0.5 if scale < 1 else float(round(scale)),
+            "metersPerTile": tidy_scale(scale),
             "shape": shape, "preset": kind,
             "settings": Settings.from_dict({**given, **({"preset": kind} if kind else {})}).to_dict()}, None
 
@@ -2202,7 +2214,8 @@ def api_settings():
         # JSON writes 1.0 as 1, so the page cannot tell a float whose default
         # happens to be whole from an int - and a woodland slider built as an
         # integer can only reach 0, 1, 2 or 3. Say which is which.
-        "types": {f.name: ("enum" if f.name in ("building_alignment", "arch_style")
+        "types": {f.name: ("enum" if f.name in ("building_alignment", "arch_style",
+                                                "height_mix")
                            else "int" if f.type in (int, "int") else "float")
                   for f in fields(Settings)},
         "options": {
@@ -2210,6 +2223,11 @@ def api_settings():
                 [value, value.capitalize()]
                 for value in BUILDING_ALIGNMENT_OPTIONS],
             "arch_style": [["auto", "Auto"], ["cn", "Chinese"], ["off", "Default"]],
+            "height_mix": [["auto", "As the place is"],
+                           ["low", "Mostly low, a few taller"],
+                           ["middle", "Mostly middling"],
+                           ["tall", "Mostly tall, a few smaller"],
+                           ["even", "Every height equally"]],
         },
         "limits": {k: list(v) for k, v in LIMITS.items()},
         "presets": {name: s.to_dict() for name, s in PRESETS.items()},
@@ -2399,15 +2417,102 @@ def api_lots():
     return jsonify({"compiled": bool(cells), "cells": len(cells)})
 
 
+@app.route("/api/placement/<name>", methods=["GET", "POST", "DELETE"])
+def api_placement(name: str):
+    """Where this map stands in the game's world, and where to put it.
+
+    GET is the world as the window draws it: Knox County, the maps already
+    installed, and this one. POST moves this one, which rewrites the few files
+    that carry the world origin and says whether the map has to be compiled
+    again (knoxbuild/placement.py). DELETE goes back to having a place picked
+    automatically.
+    """
+    from knoxbuild import placement as P
+
+    map_dir = _map_dir(name)
+    if map_dir is None:
+        return jsonify({"error": "Bad map name."}), 400
+    if request.method == "GET":
+        return jsonify(P.layout(str(map_dir), map_dir.name, str(CACHE_DIR)))
+    if request.method == "DELETE":
+        done = P.unplace(str(map_dir), map_dir.name)
+        out = P.layout(str(map_dir), map_dir.name)
+        out["moved"] = done
+        return jsonify(out)
+    body = _json_body()
+    try:
+        done = P.move(str(map_dir), map_dir.name,
+                      (body.get("cell_x"), body.get("cell_y")))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except OSError as exc:
+        return failed(f"The map could not be moved: {exc}", 500, exc)
+    out = P.layout(str(map_dir), map_dir.name)
+    out["moved"] = done
+    return jsonify(out)
+
+
+@app.route("/api/placement/<name>/link", methods=["POST"])
+def api_placement_link(name: str):
+    """The sheet for a road drawn between this map and another.
+
+    The window sends where the road was drawn, in world tiles; what comes back
+    is a map to build (generator/sketch.py): the strip of country it runs
+    through, at the same scale as the map it joins so the road is the same
+    width in tiles as the streets it meets.
+    """
+    from knoxbuild import placement as P
+
+    map_dir = _map_dir(name)
+    if map_dir is None:
+        return jsonify({"error": "Bad map name."}), 400
+    body = _json_body()
+    try:
+        out = P.link_design(str(map_dir), map_dir.name, body.get("points"),
+                            str(body.get("kind") or "primary"),
+                            scenery=body.get("scenery", True) is not False)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:                  # noqa: BLE001 - reported
+        return failed(f"That road could not be laid out: {exc}", 500, exc)
+    out["name"] = f"{map_dir.name}_link"
+    return jsonify(out)
+
+
+@app.route("/api/world-picture/<name>")
+def api_world_picture(name: str):
+    """The picture of a map already in the game, for the world view.
+
+    Assembled from that map's own tile pyramid in the player's install and
+    kept in the cache. It is their copy of the game, read on their own PC and
+    shown in their own window; nothing is copied into a map or shipped.
+    """
+    from knoxbuild import placement as P
+
+    where = P.picture_for(name, str(CACHE_DIR))
+    if not where:
+        return jsonify({"error": "No picture of that map."}), 404
+    return send_file(where["file"], mimetype="image/png",
+                     max_age=86400, conditional=True)
+
+
 @app.route("/api/install", methods=["POST"])
 def api_install():
     """Package the compiled map into ~/Zomboid/mods."""
+    from knoxbuild import placement as P
     from tools import make_map_mod
 
     data = _json_body()
     map_dir = _map_dir(data.get("mapName", ""))
     if map_dir is None:
         return jsonify({"error": "Unknown map."}), 404
+    # A map moved since it was compiled would ship cells named for where it
+    # used to be and a paper map pointing where it is now, which is a map the
+    # game loads as two halves of different places.
+    where = P.saved(str(map_dir)) or P.project_origin(str(map_dir), map_dir.name)
+    if not P.lots_match(str(map_dir), where):
+        return jsonify({"error": "This map has been moved since it was last "
+                                 "compiled. Compile it again, then install."}), 400
     # Both end up in folder names and mod.info, so they are text of a sane
     # length whatever the page sent.
     raw_title, raw_id = data.get("title"), data.get("modId")

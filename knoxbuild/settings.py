@@ -47,8 +47,15 @@ class Settings:
     straight_roads: int = 1
 
     # --- terrain ---------------------------------------------------------
-    # Multiplies how much of a forest polygon actually becomes trees.
+    # Multiplies how much tree cover the map gets: the woods the mapper drew,
+    # the trees in gardens, and the scrub scattered over open ground.
     tree_density: float = 1.0
+    # ...and this scales the woods on top of it, so the two can differ. A
+    # mapped forest and a tree in somebody's garden are not the same thing to
+    # play in - one is cover for miles, the other is a yard with a tree in it
+    # - and a map wanted thick woods round a thinly planted town had no way
+    # to say so.
+    forest_density: float = 1.0
 
     # --- buildings -------------------------------------------------------
     seed: int = 1
@@ -108,6 +115,20 @@ class Settings:
     # built, which is what every map did before this knob existed.
     arch_style: str = "auto"
 
+    # How tall the buildings OpenStreetMap says nothing about come out.
+    # "auto" is what the generator has always done: the kind of building and
+    # the size of its footprint decide (knoxbuild/regional.py), which is as
+    # close to the real thing as a guess gets. The rest shape that guess for
+    # a map somebody wants a particular skyline from - "low" for a town of
+    # one- and two-storey buildings with the odd taller one, "middle" for a
+    # town that leans to the middle of its range, "tall" for mostly tall with
+    # a few small, and "even" for every height between one and the tallest
+    # equally often.
+    #
+    # A building whose height OpenStreetMap does record is never touched by
+    # this: a mapper counting the floors of a tower beats any distribution.
+    height_mix: str = "auto"
+
     # --- zones -----------------------------------------------------------
     # Scales how many ParkingStall zones are found. Vehicles only ever spawn
     # inside one, so this is the dial for how many cars are in the streets.
@@ -128,7 +149,8 @@ class Settings:
         kept: dict = {}
         types = {f.name: f.type for f in fields(cls)}
         enum_options = {"building_alignment": BUILDING_ALIGNMENT_OPTIONS,
-                        "arch_style": ARCH_STYLE_OPTIONS}
+                        "arch_style": ARCH_STYLE_OPTIONS,
+                        "height_mix": HEIGHT_MIX_OPTIONS}
         for name, raw in list(base.items()) + list(data.items()):
             if name not in types:
                 continue          # unknown key, including "preset" itself
@@ -167,6 +189,7 @@ LIMITS = {
     "zombies_per_resident": (0.0, 5.0),
     "m2_per_person": (10.0, 150.0),
     "tree_density": (0.0, 3.0),
+    "forest_density": (0.0, 3.0),
     "seed": (0, 2 ** 31 - 1),
     "true_map": (0, 1),
     "fill_gaps": (0, 1),
@@ -196,10 +219,12 @@ LIMITS = {
     # Not a range at all - the page asks /api/settings for the options -
     # but every knob gets an entry so the settings form can be built blind.
     "arch_style": (0, 3),
+    "height_mix": (0, 4),
 }
 
 BUILDING_ALIGNMENT_OPTIONS = ("real", "smart", "rectilinear", "rectangle")
 ARCH_STYLE_OPTIONS = ("auto", "cn", "off")
+HEIGHT_MIX_OPTIONS = ("auto", "low", "middle", "tall", "even")
 
 
 PRESETS = {

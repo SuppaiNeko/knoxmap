@@ -344,5 +344,55 @@ class Keeping(unittest.TestCase):
         self.assertEqual(os.path.dirname(path), P.folder(self.dir))
 
 
+class TheStaircaseInADrawnBuilding(unittest.TestCase):
+    """A building drawn by hand needs its stairs somewhere, and the generator
+    put them in the middle of the floor - which over a drawing means in the
+    middle of a drawn room. A 6x6 room on two storeys came back as two rooms,
+    and a smaller one came back as the staircase and nothing else."""
+
+    def built(self, w, h, storeys, sheet=22):
+        design = D.clean({"width": sheet, "height": sheet, "storeys": storeys,
+                          "rooms": [room(1, 1, w, h, "livingroom", level)
+                                    for level in range(storeys)]})
+        return D.stack(design)
+
+    def test_a_room_is_not_cut_in_two_by_the_stairs_when_it_need_not_be(self):
+        for w, h in ((7, 7), (10, 10), (20, 16)):
+            with self.subTest(size=(w, h)):
+                rooms = self.built(w, h, 2).storeys[0].rooms
+                living = [r for r in rooms if r.kind == "livingroom"]
+                self.assertEqual(len(living), 1,
+                                 "the drawn room came back in pieces")
+                # And the shaft is at the edge of it, not through the middle.
+                shaft = [r for r in rooms if r.is_core][0]
+                self.assertTrue(shaft.x0 == 1 or shaft.y0 == 1
+                                or shaft.x1 == w or shaft.y1 == h)
+
+    def test_a_drawing_with_no_room_for_stairs_is_one_storey(self):
+        # 5x6 is wider than the shaft and not wide enough to keep a room
+        # beside it, so asking for two storeys used to come back as a
+        # staircase where the room had been.
+        built = self.built(5, 6, 2)
+        self.assertEqual(len(built.storeys), 1)
+        self.assertEqual([r.kind for r in built.storeys[0].rooms], ["livingroom"])
+
+    def test_one_storey_is_never_touched(self):
+        rooms = self.built(6, 6, 1).storeys[0].rooms
+        self.assertEqual([(r.x0, r.y0, r.x1, r.y1, r.kind) for r in rooms],
+                         [(1, 1, 6, 6, "livingroom")])
+
+
+class TheRoomsOnOffer(unittest.TestCase):
+    def test_no_two_rooms_are_offered_under_the_same_name(self):
+        # The editor lists what it can draw by name; two rooms with one name
+        # between them is a list with "Living Room" in it twice and no way to
+        # tell which is which.
+        for kind in (None, "house", "police", "school", "restaurant"):
+            with self.subTest(kind=kind):
+                labels = [entry["label"] for entry in D.room_kinds(kind)]
+                self.assertEqual(len(labels), len(set(labels)),
+                                 sorted(l for l in labels if labels.count(l) > 1))
+
+
 if __name__ == "__main__":
     unittest.main()

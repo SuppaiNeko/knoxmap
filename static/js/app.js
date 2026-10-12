@@ -306,6 +306,48 @@ function updateBboxFields() {
     : '';
 }
 
+// ---- an area typed rather than drawn -----------------------------------------
+// The four corner boxes are filled in by whatever is drawn on the map, and
+// they also work the other way round: somebody who knows where their map ends
+// - a county line, a coordinate out of another tool - types the degrees and
+// gets the box, instead of nudging a rectangle until the numbers look right.
+function coordsNote(text, bad) {
+  const box = document.getElementById('coordsNote');
+  box.textContent = text || '';
+  box.classList.toggle('bad', !!bad);
+}
+
+function areaFromCoords() {
+  const read = id => parseFloat(String(document.getElementById(id).value)
+    .replace(',', '.'));
+  const [s, w, n, e] = ['south', 'west', 'north', 'east'].map(read);
+  if ([s, w, n, e].some(v => !Number.isFinite(v))) {
+    coordsNote('Fill in all four corners first.', true);
+    return;
+  }
+  // Said plainly rather than quietly swapped: a map built upside down from a
+  // typo is worse than being told the typo.
+  if (s >= n || w >= e) {
+    coordsNote('South must be below north, and west left of east.', true);
+    return;
+  }
+  if (Math.abs(s) > 85.05 || Math.abs(n) > 85.05 || Math.abs(w) > 180 || Math.abs(e) > 180) {
+    coordsNote('Those are outside the map: 85 degrees north and south, 180 east and west.', true);
+    return;
+  }
+  const layer = L.rectangle([[s, w], [n, e]], SEL_STYLE);
+  setSelection(layer);
+  map.fitBounds(layer.getBounds());
+  coordsNote('Area taken from the corners you typed.');
+}
+
+document.getElementById('coordsApply').addEventListener('click', areaFromCoords);
+for (const id of ['south', 'west', 'north', 'east']) {
+  document.getElementById(id).addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); areaFromCoords(); }
+  });
+}
+
 function clearBboxFields() {
   ['south', 'west', 'north', 'east'].forEach(id => {
     document.getElementById(id).value = '';
@@ -328,11 +370,10 @@ function readScale() {
   const el = document.getElementById('metersPerTile');
   let v = parseFloat(String(el.value).replace(',', '.'));
   if (!Number.isFinite(v)) return 1;
-  // Whole metres, except the half metre: a tile is a metre in the game, so
-  // the only fraction worth having is the one that doubles the detail on a
-  // small area. app.py settles it the same way.
-  if (v < 1) return 0.5;
-  return Math.min(100, Math.round(v));
+  // Quarter metres. Between 1 and 2 is where a scale earns its keep - a town
+  // at full size, or everything in it half that - so the steps in between
+  // are worth having. app.py settles it the same way (tidy_scale).
+  return Math.min(100, Math.max(0.5, Math.round(v / 0.25) * 0.25));
 }
 
 function fixScaleField() {
@@ -401,7 +442,8 @@ const SETTING_LABELS = {
   zombies_per_resident:['Zombies per person', 'Each person who lived or worked here becomes this many zombies.'],
   m2_per_person:       ['Living space (m²)', 'Per resident. Lower = more crowded homes = more zombies. ~50 city, 45 town, 60 suburb.'],
   spawn_density:       ['Horde cap', 'Most zombies one 10×10 m spot can hold. Vanilla towns peak at 10.'],
-  tree_density:        ['Woodland', 'Scales tree cover. Trees are cover to hide in.'],
+  tree_density:        ['Woodland', 'Scales tree cover everywhere: the woods, the gardens and the scrub over open ground. Trees are cover to hide in.'],
+  forest_density:      ['Forests', 'Scales the woods the mapper drew, on top of Woodland. Thick forest round a thinly planted town, or the other way about.'],
   seed:                ['Seed', 'Same seed and area gives the same town again.'],
   fill_gaps:           ['Fill gaps from Overture', 'On adds the buildings OpenStreetMap has not got, from Overture Maps - OSM plus machine-detected roofprints, same licence. Worth it where your town is half missing from OSM; elsewhere it adds sheds. Needs DuckDB.'],
   true_map:            ['True map generation', 'On builds every address as mapped. Off keeps the real roads, rivers, woods and terrain, but leaves out half the houses and grows the rest into proper homes with yards. Named places are always built, at the game’s size.'],
@@ -414,6 +456,7 @@ const SETTING_LABELS = {
   apartment_footprint: ['Flats above', 'An untagged footprint this big reads as flats.'],
   apartment_chance:    ['Flats chance', 'How often such a footprint really becomes flats.'],
   vanilla_tiles:       ['Vanilla tiles only', 'On builds with the game’s own art only, leaving Erika’s Tiles out even when it is installed. A map built with the mod needs the mod to look right, so this is the one to turn on before handing a map to somebody who has not subscribed.'],
+  height_mix:          ['Height mix', 'How tall the buildings OpenStreetMap says nothing about come out. As the place is lets the kind of building and the size of its footprint decide, which is the closest to the real thing. The rest shape that guess for the skyline you want. A building whose floors OSM does record keeps them whatever this says.'],
   max_levels:          ['Tallest building', 'Storeys, up to 30 - as tall as the base game gets. OSM heights are capped to this. Tall cities take longer to compile.'],
   room_size:           ['Room size', 'Target room area in tiles before it gets split.'],
   building_alignment:  ['Building alignment', 'Real preserves the mapped outline. Smart squares near-grid buildings. Rectilinear aligns the dominant wall direction while keeping the footprint shape. Rectangle uses a clean box.'],
@@ -477,6 +520,7 @@ function buildSettingsForm(values) {
     body.appendChild(wrap);
   }
   fx.wireSettings(body);
+  runListSearch('advanced-body');
 }
 
 function readSettings() {
@@ -1737,6 +1781,88 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// ---- finding something in a long list -------------------------------------
+//
+// The palettes run to 113 rooms and 63 things to draw, the settings to
+// twenty-six, and a map can carry any number of zones and hand-built
+// buildings. Reading one of those by eye to find the one thing wanted is the
+// slowest part of using the window, so each gets a box that narrows it to
+// what matches as it is typed.
+//
+// Nothing is removed, only hidden, so emptying the box puts the list back
+// exactly as it was - and the search is run again every time the list is
+// drawn, because all of these are rebuilt from scratch whenever anything in
+// them changes.
+const LIST_SEARCHES = {};
+
+function searchableList(inputId, boxId, item, group, least = 8) {
+  const input = document.getElementById(inputId);
+  if (!input || !document.getElementById(boxId)) return;
+  LIST_SEARCHES[boxId] = { input, item, group, least, query: '' };
+  input.addEventListener('input', () => {
+    LIST_SEARCHES[boxId].query = input.value;
+    runListSearch(boxId);
+  });
+  input.addEventListener('keydown', ev => {
+    // Escape empties it, as it does in any search box.
+    if (ev.key === 'Escape' && input.value) {
+      ev.stopPropagation();
+      input.value = '';
+      LIST_SEARCHES[boxId].query = '';
+      runListSearch(boxId);
+    }
+  });
+  runListSearch(boxId);
+}
+
+// What a line of a list can be found by: what it says, what its tooltip says
+// - the palettes keep the OpenStreetMap tags there - and anything the list
+// put in data-find itself.
+function listHaystack(el) {
+  return (`${el.textContent} ${el.getAttribute('title') || ''} `
+          + `${el.dataset.find || ''}`).toLowerCase();
+}
+
+function runListSearch(boxId) {
+  const found = LIST_SEARCHES[boxId];
+  const box = document.getElementById(boxId);
+  if (!found || !box) return;
+  const items = [...box.querySelectorAll(found.item)];
+  // A list short enough to read at a glance is one nobody needs to search.
+  found.input.hidden = items.length < found.least;
+  if (found.input.hidden && found.query) {
+    found.input.value = '';
+    found.query = '';
+  }
+  const words = found.query.toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0;
+  for (const el of items) {
+    const hay = listHaystack(el);
+    const hit = words.every(word => hay.includes(word));
+    el.classList.toggle('out-of-search', !hit);
+    shown += hit ? 1 : 0;
+  }
+  if (found.group) {
+    // A heading with nothing left under it goes with its things.
+    for (const head of box.querySelectorAll(found.group)) {
+      head.classList.toggle('out-of-search',
+        !head.querySelector(`${found.item}:not(.out-of-search)`));
+    }
+  }
+  found.input.classList.toggle('found-nothing', Boolean(words.length) && !shown);
+}
+
+// Every list in the window long enough to be worth searching. The last number
+// is how many things it has to hold before the box is worth showing at all.
+searchableList('settingFind', 'advanced-body', '.setting', null, 8);
+searchableList('sketchFind', 'sketchPalette', '.sketch-pick', '.palette-group', 12);
+searchableList('boardFind', 'boardPalette', '.sketch-pick', '.palette-group', 12);
+searchableList('zoneFind', 'zoneList', 'li', null, 6);
+searchableList('zoneSettingFind', 'zoneEditor', 'label.zone-row', null, 6);
+searchableList('builtFind', 'builtList', 'li', null, 6);
+searchableList('bdFind', 'bdRooms', '.sketch-pick', '.palette-group', 12);
+
+
 // ---- steps 3-5: buildings, compile, install -------------------------------
 //
 // Everything after terrain generation, driven from this one window. The only
@@ -1784,6 +1910,9 @@ function setupPipeline(data) {
   note('installNote', 'Copies the compiled map into ~/Zomboid/mods.');
   renderCensus(null);
   document.getElementById('retryCellsBtn').hidden = true;
+  // Where this one stands in the world, and whether it has been moved since
+  // it was compiled.
+  loadPlacement(data.mapName);
   checkLots();
   // Whatever the last compile of this map left behind, said again now: the
   // window has been closed and reopened since, and "done" would be a lie.
@@ -1871,7 +2000,7 @@ async function checkLots() {
       clearInterval(lotsPoll);
       note('worldedNote', `${data.cells} cells compiled.`, 'ok');
       document.getElementById('installBtn').disabled = false;
-      note('installNote', 'Ready to install.');
+      sayIfInstallable();
     }
   } catch (_) { /* keep polling quietly */ }
 }
@@ -2221,6 +2350,7 @@ async function loadSketchPalette() {
   const box = document.getElementById('sketchPalette');
   if (!box) return;
   box.innerHTML = paletteMarkup();
+  runListSearch('sketchPalette');
   box.addEventListener('click', ev => {
     const btn = ev.target.closest('.sketch-pick');
     if (btn) startSketch(btn.dataset.kind, btn.dataset.geometry);
@@ -2556,6 +2686,11 @@ let boardMap = null;
 let boardLayer = null;
 let boardSheet = null;          // the rectangle showing the edge of the sheet
 let boardGrid = null;
+// A picture laid over the sheet to draw on top of: a screenshot of a town
+// plan, a sketch on paper, the map of somewhere that is not on OpenStreetMap.
+// It is only ever something to trace, so it is not saved with the drawing -
+// what gets built is what was drawn over it.
+let boardTrace = null;
 let boardKind = null;
 let boardHandler = null;
 let boardPicked = null;
@@ -2598,8 +2733,11 @@ function boardDrawSheet() {
   const lines = [];
   for (let x = BOARD_GRID_M; x < w; x += BOARD_GRID_M) lines.push([[0, x], [h, x]]);
   for (let y = BOARD_GRID_M; y < h; y += BOARD_GRID_M) lines.push([[y, 0], [y, w]]);
-  boardGrid = L.polyline(lines, { pane: 'tilePane', color: '#2b3326',
+  boardGrid = L.polyline(lines, { pane: 'boardGridPane', color: '#2b3326',
                                   weight: 1, interactive: false }).addTo(boardMap);
+  // The picture being traced covers the sheet, so it is stretched to it
+  // whenever the sheet changes size.
+  if (boardTrace) boardTrace.setBounds([[0, 0], [h, w]]);
   boardMap.setMaxBounds([[-h * 0.1, -w * 0.1], [h * 1.1, w * 1.1]]);
   boardShowCount();
 }
@@ -2683,6 +2821,7 @@ function boardStart(kind, geometry) {
 
 function boardPaletteInto(box) {
   box.innerHTML = paletteMarkup();
+  runListSearch(box.id);
   box.addEventListener('click', ev => {
     const btn = ev.target.closest('.sketch-pick');
     if (btn) boardStart(btn.dataset.kind, btn.dataset.geometry);
@@ -2741,6 +2880,14 @@ function boardOpen(mapName) {
     boardMap = L.map('boardMap', {
       crs: L.CRS.Simple, minZoom: -6, maxZoom: 4, zoomControl: true,
       attributionControl: false });
+    // Three layers under the drawing: the sheet, then the picture being
+    // traced, then the grid over both so its hundred-metre squares are still
+    // readable against the picture.
+    boardMap.createPane('boardTracePane').style.zIndex = 210;
+    boardMap.createPane('boardGridPane').style.zIndex = 220;
+    for (const name of ['boardTracePane', 'boardGridPane']) {
+      boardMap.getPane(name).style.pointerEvents = 'none';
+    }
     // A Leaflet map needs somewhere to be looking before anything can be put
     // on it or measured against it; fitting the sheet refines this a moment
     // later, once the panel it lives in has a size.
@@ -2794,6 +2941,58 @@ document.getElementById('boardOpen').addEventListener('click', async () => {
 document.getElementById('boardClose').addEventListener('click', () => {
   boardStop();
   document.getElementById('board').hidden = true;
+});
+
+// ---- a picture to trace ------------------------------------------------------
+// Asked for by somebody drawing a town that only exists on paper: the sheet
+// has no world map under it, which is the point of it, and also means there
+// is nothing to go by. A picture laid under the drawing gives them something
+// to follow. It stays in the window - nothing is uploaded and nothing is
+// saved with the sheet - because what is built is what was drawn over it.
+const BOARD_TRACE_MAX_MB = 12;
+
+function boardTraceShow(on) {
+  document.getElementById('boardTraceFade').hidden = !on;
+  document.getElementById('boardTraceOff').hidden = !on;
+}
+
+document.getElementById('boardTrace').addEventListener('click', () =>
+  document.getElementById('boardTraceFile').click());
+
+document.getElementById('boardTraceFile').addEventListener('change', ev => {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (!file) return;
+  if (file.size > BOARD_TRACE_MAX_MB * 1e6) {
+    boardNote(`That picture is ${(file.size / 1e6).toFixed(0)} MB. `
+      + `Something under ${BOARD_TRACE_MAX_MB} MB is plenty to trace.`);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => boardNote('That picture could not be read.');
+  reader.onload = () => {
+    const { w, h } = boardSize();
+    if (boardTrace) boardMap.removeLayer(boardTrace);
+    boardTrace = L.imageOverlay(reader.result, [[0, 0], [h, w]], {
+      pane: 'boardTracePane', interactive: false,
+      opacity: parseFloat(document.getElementById('boardTraceOpacity').value),
+    }).addTo(boardMap);
+    boardTraceShow(true);
+    boardNote('Picture laid over the sheet. Draw on top of it; it is not part '
+      + 'of the map and is not saved with the sheet.');
+  };
+  reader.readAsDataURL(file);
+});
+
+document.getElementById('boardTraceOpacity').addEventListener('input', ev => {
+  if (boardTrace) boardTrace.setOpacity(parseFloat(ev.target.value));
+});
+
+document.getElementById('boardTraceOff').addEventListener('click', () => {
+  if (boardTrace) boardMap.removeLayer(boardTrace);
+  boardTrace = null;
+  boardTraceShow(false);
+  boardNote('Picture removed.');
 });
 
 document.getElementById('boardUndo').addEventListener('click', () => {
@@ -2895,6 +3094,24 @@ let zoneDrawer = null;
 
 const ZONE_STYLE = { color: '#8f7ad6', weight: 2, dashArray: '5,4', fillOpacity: 0.12 };
 const ZONE_PICKED = { color: '#c9a8ff', weight: 3, dashArray: null, fillOpacity: 0.25 };
+// Every zone is drawn in the same purple, which is right - a zone is a zone -
+// and leaves four of them on one town impossible to tell apart. The one under
+// the pointer lights up and says which it is.
+const ZONE_HOVER = { color: '#efe4ff', weight: 3, dashArray: null, fillOpacity: 0.32 };
+
+// How a zone is drawn now: under the pointer, picked, or neither.
+function zoneDress(zone, hover) {
+  if (!zone || !zone.layer) return;
+  zone.layer.setStyle(hover ? ZONE_HOVER
+    : zoneList[zonePicked] === zone ? ZONE_PICKED : ZONE_STYLE);
+}
+
+// What it says when the pointer is on it: its name, and what it does
+// differently - which is the thing being looked for when a map has several.
+function zoneTip(zone, i) {
+  return `<b>${escapeHtml(zone.name || 'Zone ' + (i + 1))}</b>`
+    + `<br><span class="zone-tip-what">${escapeHtml(zoneSummary(zone))}</span>`;
+}
 
 let zonePresets = [];      // the hand-built buildings a zone can draw from
 
@@ -2945,6 +3162,12 @@ function drawZoneList() {
       <span>${escapeHtml(z.name || 'Zone ' + (i + 1))}</span>
       <span class="zone-what">${escapeHtml(zoneSummary(z))}</span>
       <button type="button" data-drop="${i}">Remove</button></li>`).join('');
+  runListSearch('zoneList');
+  // The list is redrawn for every change a zone has in it, so this is where
+  // what the map says about it is kept up to date.
+  zoneList.forEach((z, i) => {
+    if (z.layer) z.layer.setTooltipContent(zoneTip(z, i));
+  });
   showZoneCount();
 }
 
@@ -2966,7 +3189,12 @@ function zoneSwitchable(setting) {
 function drawZoneEditor() {
   const box = document.getElementById('zoneEditor');
   const zone = zoneList[zonePicked];
-  if (!zone || !zoneMeta) { box.hidden = true; box.innerHTML = ''; return; }
+  if (!zone || !zoneMeta) {
+    box.hidden = true;
+    box.innerHTML = '';
+    runListSearch('zoneEditor');     // and its search box goes with it
+    return;
+  }
   box.hidden = false;
   const styles = ['<option value="">(whatever the map uses)</option>'].concat(
     zoneMeta.styles.map(s =>
@@ -2978,7 +3206,7 @@ function drawZoneEditor() {
   const presetBox = zonePresets.length
     ? `<p class="hint">Hand-built buildings to use here. A plot none of them
          fits gets a generated building as usual.</p>
-       ${zonePresets.map(p => `<label class="zone-preset">
+       ${zonePresets.map(p => `<label class="zone-preset zone-row">
          <input type="checkbox" data-building-preset="${escapeHtml(p.name)}"
            ${chosen.has(p.name) ? 'checked' : ''}>
          <span>${escapeHtml(p.name)}</span>
@@ -2993,7 +3221,8 @@ function drawZoneEditor() {
     <label><span>Walls</span><select id="zoneStyle">${styles.join('')}</select></label>
     ${presetBox}
     <p class="hint">Leave a box empty and the map's own setting is used there.</p>
-    ${zoneMeta.settings.map(s => `<label><span>${escapeHtml(SETTING_LABELS[s.id]
+    ${zoneMeta.settings.map(s => `<label class="zone-row"
+      data-find="${escapeHtml(s.id)}"><span>${escapeHtml(SETTING_LABELS[s.id]
         ? SETTING_LABELS[s.id][0] : s.id)}</span>
       ${zoneSwitchable(s)
         // On or off, and a third state the number box could not say: leave it
@@ -3028,6 +3257,7 @@ function drawZoneEditor() {
       drawZoneList();
     });
   }
+  runListSearch('zoneEditor');
   for (const input of box.querySelectorAll('[data-zone-key]')) {
     input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', ev => {
       const key = ev.target.dataset.zoneKey;
@@ -3043,6 +3273,12 @@ function drawZoneEditor() {
 function addZoneLayer(zone) {
   const layer = L.polygon(zone.ring.map(([lon, lat]) => [lat, lon]), ZONE_STYLE);
   layer.on('click', ev => { L.DomEvent.stop(ev); zonePick(zoneList.indexOf(zone)); });
+  // Sticky, so where zones overlap the label follows the pointer and names
+  // the one it is actually over rather than the one it started on.
+  layer.bindTooltip(zoneTip(zone, zoneList.indexOf(zone)),
+                    { sticky: true, className: 'zone-tip' });
+  layer.on('mouseover', () => zoneDress(zone, true));
+  layer.on('mouseout', () => zoneDress(zone, false));
   zoneLayer.addLayer(layer);
   zone.layer = layer;
 }
@@ -3113,6 +3349,15 @@ document.getElementById('zoneList').addEventListener('click', ev => {
   const row = ev.target.closest('li[data-i]');
   if (row) zonePick(parseInt(row.dataset.i, 10));
 });
+
+// ...and the other way round: the row under the pointer lights its zone up on
+// the map, which is how you find out where a zone in the list actually is.
+for (const [event, on] of [['mouseover', true], ['mouseout', false]]) {
+  document.getElementById('zoneList').addEventListener(event, ev => {
+    const row = ev.target.closest('li[data-i]');
+    if (row) zoneDress(zoneList[parseInt(row.dataset.i, 10)], on);
+  });
+}
 
 document.getElementById('zoneSave').addEventListener('click', async () => {
   if (!openedMap) {
@@ -3196,6 +3441,7 @@ function drawBuiltList() {
         · ${escapeHtml(bdPresetKind(p))}</span>
       ${p.editable ? `<button type="button" data-open-built="${escapeHtml(p.name)}">Open</button>` : ''}
       <button type="button" data-drop-built="${escapeHtml(p.name)}">Remove</button></li>`).join('');
+  runListSearch('builtList');
   const badge = document.getElementById('builtCount');
   if (badge) badge.textContent = presets.length ? `(${presets.length})` : '';
 }
@@ -3271,6 +3517,71 @@ document.getElementById('builtList').addEventListener('click', async ev => {
 
 // ---- the editor itself -----------------------------------------------------
 
+// Drawing a rectangle over a room takes that much out of whatever is under
+// it, which is right for drawing and wrong for changing your mind: nudging
+// one wall of a room meant redrawing the room, and the redraw ate its
+// neighbours. In adjust mode a drag on a room's edge moves that edge and a
+// drag in its middle moves the whole room, keeping its kind and leaving
+// everything else where it was.
+let bdMode = 'draw';
+
+function bdRoomAt(x, y) {
+  const rooms = (bdDesign && bdDesign.rooms) || [];
+  for (let i = rooms.length - 1; i >= 0; i -= 1) {
+    const r = rooms[i];
+    if (r.level === bdLevel && x >= r.x && x < r.x + r.w
+        && y >= r.y && y < r.y + r.h) return { i, r };
+  }
+  return null;
+}
+
+// Which part of a room was taken hold of: a side, a corner, or the middle.
+// The band is a quarter of the shorter side, up to two tiles, so a small room
+// is not all edge and a big one does not need the pointer on the pixel.
+function bdGrip(r, x, y) {
+  const near = Math.max(1, Math.min(2, Math.floor(Math.min(r.w, r.h) / 4)));
+  let edge = '';
+  if (y - r.y < near) edge += 'n';
+  else if (r.y + r.h - 1 - y < near) edge += 's';
+  if (x - r.x < near) edge += 'w';
+  else if (r.x + r.w - 1 - x < near) edge += 'e';
+  return edge;
+}
+
+const BD_CURSOR = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize',
+                    w: 'ew-resize', nw: 'nwse-resize', se: 'nwse-resize',
+                    ne: 'nesw-resize', sw: 'nesw-resize', '': 'move' };
+
+function bdResized(r, edge, dx, dy) {
+  let { x, y, w, h } = r;
+  if (!edge) {
+    x += dx;
+    y += dy;
+  }
+  if (edge.includes('w')) { const by = Math.min(dx, w - 1); x += by; w -= by; }
+  if (edge.includes('e')) { w = Math.max(1, w + dx); }
+  if (edge.includes('n')) { const by = Math.min(dy, h - 1); y += by; h -= by; }
+  if (edge.includes('s')) { h = Math.max(1, h + dy); }
+  x = Math.min(Math.max(x, 0), bdDesign.width - 1);
+  y = Math.min(Math.max(y, 0), bdDesign.height - 1);
+  return { x, y, w: Math.min(w, bdDesign.width - x),
+           h: Math.min(h, bdDesign.height - y) };
+}
+
+// The room goes back on top of the pile: a room dragged over its neighbour
+// takes that ground, the same as drawing it there would.
+function bdApplyEdit(idx, rect) {
+  if (!bdDesign || bdBusy) return;
+  bdRemember();
+  const next = JSON.parse(JSON.stringify(bdDesign));
+  const room = next.rooms[idx];
+  if (!room) return;
+  next.rooms.splice(idx, 1);
+  next.rooms.push({ level: room.level, x: rect.x, y: rect.y,
+                    w: rect.w, h: rect.h, kind: room.kind });
+  bdRefresh(next);
+}
+
 function bdRoomsMarkup() {
   const groups = [];
   for (const entry of (bdMeta && bdMeta.rooms) || []) {
@@ -3281,13 +3592,18 @@ function bdRoomsMarkup() {
       last.items.push(entry);
     }
   }
+  const adjust = `<div class="palette-group">
+      <span class="palette-head">Change what is drawn</span>
+      <button type="button" class="sketch-pick ${bdMode === 'adjust' ? 'on' : ''}"
+        data-mode="adjust" title="Drag a room's edge to move it, its middle to move the room">
+        Adjust rooms</button></div>`;
   const eraser = `<div class="palette-group">
       <span class="palette-head">The eraser</span>
       <button type="button" class="sketch-pick ${bdRoom === '' ? 'on' : ''}"
         data-room="" title="Takes what is under it out of the building">
         <span class="swatch" style="background:#e8e7e2"></span>
         Nothing - cut it away</button></div>`;
-  return eraser + groups.map(g => `<div class="palette-group">
+  return adjust + eraser + groups.map(g => `<div class="palette-group">
       <span class="palette-head">${escapeHtml(g.name)}</span>
       ${g.items.map(e => `<button type="button"
         class="sketch-pick ${e.id === bdRoom ? 'on' : ''}" data-room="${e.id}"
@@ -3299,7 +3615,9 @@ function bdRoomsMarkup() {
 
 function drawBdRooms() {
   const box = document.getElementById('bdRooms');
-  if (box) box.innerHTML = bdRoomsMarkup();
+  if (!box) return;
+  box.innerHTML = bdRoomsMarkup();
+  runListSearch('bdRooms');
 }
 
 function drawBdStoreys() {
@@ -3421,7 +3739,7 @@ async function bdStart() {
   }
   drawBdRooms();
   await bdRefresh(bdDesign, 0);
-  bdNote('Pick a room, then drag a rectangle on the plan.');
+  bdNote('Pick a room, then drag a rectangle on the plan. Adjust rooms moves the walls of one already drawn.');
 }
 
 async function bdOpenSaved(name) {
@@ -3451,9 +3769,20 @@ document.getElementById('bdClose').addEventListener('click', () => {
 });
 
 document.getElementById('bdRooms').addEventListener('click', ev => {
+  const tool = ev.target.closest('[data-mode]');
+  if (tool) {
+    bdMode = bdMode === 'adjust' ? 'draw' : 'adjust';
+    drawBdRooms();
+    bdNote(bdMode === 'adjust'
+      ? 'Drag the edge of a room to move that wall, or its middle to move the '
+        + 'whole room. Pick a room from the list to go back to drawing.'
+      : 'Back to drawing: drag a rectangle on the plan.');
+    return;
+  }
   const btn = ev.target.closest('[data-room]');
   if (!btn) return;
   bdRoom = btn.dataset.room;
+  bdMode = 'draw';
   drawBdRooms();
   bdNote(bdRoom ? `Drag on the plan to draw a ${btn.textContent.trim()}.`
                 : 'Drag on the plan to cut that part out of the building.');
@@ -3470,39 +3799,93 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
 (() => {
   const plan = document.getElementById('bdPlan');
   const ghost = document.getElementById('bdDrag');
-  let from = null;
+  let from = null;                // where a drawing drag started
+  let grab = null;                // the room being adjusted, and where by
 
-  function place(a, b) {
+  function placeBox(x0, y0, w, h) {
     const img = document.getElementById('bdImage');
     const box = img.getBoundingClientRect();
     const plot = plan.getBoundingClientRect();
     const tw = box.width / bdDesign.width;
     const th = box.height / bdDesign.height;
-    const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
     ghost.hidden = false;
     ghost.style.left = `${box.left - plot.left + x0 * tw}px`;
     ghost.style.top = `${box.top - plot.top + y0 * th}px`;
-    ghost.style.width = `${(Math.abs(b.x - a.x) + 1) * tw}px`;
-    ghost.style.height = `${(Math.abs(b.y - a.y) + 1) * th}px`;
+    ghost.style.width = `${w * tw}px`;
+    ghost.style.height = `${h * th}px`;
+  }
+
+  function place(a, b) {
+    placeBox(Math.min(a.x, b.x), Math.min(a.y, b.y),
+             Math.abs(b.x - a.x) + 1, Math.abs(b.y - a.y) + 1);
+  }
+
+  function dragged(now) {
+    return bdResized(grab.r, grab.edge, now.x - grab.at.x, now.y - grab.at.y);
   }
 
   plan.addEventListener('pointerdown', ev => {
     if (!bdDesign || bdBusy) return;
-    from = bdTileAt(ev);
-    if (!from) return;
+    const at = bdTileAt(ev);
+    if (!at) return;
     ev.preventDefault();          // dragging the picture itself, otherwise
-    place(from, from);
+    if (bdMode === 'adjust') {
+      const found = bdRoomAt(at.x, at.y);
+      if (!found) {
+        bdNote('Take hold of a room that is already drawn: its edge to move '
+               + 'that wall, its middle to move the room.');
+        return;
+      }
+      grab = { idx: found.i, r: found.r, at,
+               edge: bdGrip(found.r, at.x, at.y) };
+      placeBox(found.r.x, found.r.y, found.r.w, found.r.h);
+      return;
+    }
+    from = at;
+    place(at, at);
+  });
+
+  // What the pointer would take hold of, before it does.
+  plan.addEventListener('pointermove', ev => {
+    if (grab || from || !bdDesign) return;
+    if (bdMode !== 'adjust') { plan.style.cursor = ''; return; }
+    const at = bdTileAt(ev);
+    const found = at && bdRoomAt(at.x, at.y);
+    plan.style.cursor = found
+      ? BD_CURSOR[bdGrip(found.r, at.x, at.y)] : 'not-allowed';
   });
   // The rest of the drag is watched on the window rather than on the plan:
   // letting go past the edge of the picture is how anyone draws a room that
   // reaches the wall, and on the plan alone that release never arrived - the
   // room was never drawn and the outline stayed on the screen.
   window.addEventListener('pointermove', ev => {
+    if (grab) {
+      const now = bdTileAt(ev);
+      if (now) {
+        const rect = dragged(now);
+        placeBox(rect.x, rect.y, rect.w, rect.h);
+      }
+      return;
+    }
     if (!from) return;
     const now = bdTileAt(ev);
     if (now) place(from, now);
   });
   window.addEventListener('pointerup', ev => {
+    if (grab) {
+      const now = bdTileAt(ev) || grab.at;
+      const held = grab;
+      grab = null;
+      ghost.hidden = true;
+      const to = bdResized(held.r, held.edge,
+                           now.x - held.at.x, now.y - held.at.y);
+      // A click that moved nothing is a click: the room stays as it was.
+      if (to.x !== held.r.x || to.y !== held.r.y
+          || to.w !== held.r.w || to.h !== held.r.h) {
+        bdApplyEdit(held.idx, to);
+      }
+      return;
+    }
     if (!from) return;
     const now = bdTileAt(ev) || from;
     ghost.hidden = true;
@@ -3510,7 +3893,11 @@ document.getElementById('bdStoreyTabs').addEventListener('click', ev => {
     from = null;
     bdDraw(started.x, started.y, now.x, now.y);
   });
-  window.addEventListener('pointercancel', () => { from = null; ghost.hidden = true; });
+  window.addEventListener('pointercancel', () => {
+    from = null;
+    grab = null;
+    ghost.hidden = true;
+  });
 })();
 
 for (const id of ['bdWidth', 'bdHeight', 'bdStoreys']) {
@@ -3606,3 +3993,532 @@ document.getElementById('bdSave').addEventListener('click', async () => {
 });
 
 refreshBuilt();
+// ---- where the map goes in the world ----------------------------------------
+//
+// Project Zomboid holds one grid for every map installed, with Knox County in
+// the corner of it. A generated map used to be dropped east of the vanilla map
+// and east again of anything else already installed, which keeps maps off each
+// other and leaves nobody any say in where their town is. This is the say.
+//
+// The world is drawn as it really is rather than as boxes: every map on this
+// PC, cell by cell, from the compiled files themselves - Knox County is 4,065
+// cells with bites out of it, not a rectangle - and this map as the picture it
+// came out as (knoxbuild/placement.py).
+//
+// Moving one that is already built rewrites the few files that carry the world
+// origin and then needs the map compiling again, because compiled cells are
+// named for where they land.
+let placeWorld = null;          // the layout as the server sees it
+let placePicked = null;         // the corner being tried, in cells
+let placeDragging = false;
+let placePreview = null;        // this map's own picture, once it has loaded
+const placePictures = {};       // the game's own maps, by name, once loaded
+let placeRoad = [];             // a road being drawn, in world tiles
+let placeDrawingRoad = false;
+
+const PLACE_PAD = 8;            // cells of empty grid round what is drawn
+const PLACE_MIN_SPAN = 110;     // never zoom in closer than this many cells
+const LINK_MARGIN_CELLS = 1;    // ground either side of a link road
+const LINK_MAX_CELLS = 2500;    // a link bigger than this is a map, not a road
+
+function placeNote(text, bad) {
+  const box = document.getElementById('placeNote');
+  if (!box) return;
+  box.textContent = text || '';
+  box.classList.toggle('bad', !!bad);
+}
+
+// Everything is drawn in world tiles, because the two grids in play do not
+// divide into each other: a map is placed on 300-tile cells and compiled into
+// 256-tile ones, and tiles are what both of them are made of.
+function placeTiles() {
+  return (placeWorld && placeWorld.cellTiles) || 300;
+}
+
+function placeMine() {
+  if (!placeWorld) return null;
+  const at = placePicked || placeWorld.map;
+  const k = placeTiles();
+  return { x: at.x * k, y: at.y * k,
+           w: placeWorld.map.w * k, h: placeWorld.map.h * k };
+}
+
+// Every other map's cells as tile rectangles, one per run of cells in a row.
+function placeOtherRects() {
+  if (!placeWorld) return [];
+  const k = placeWorld.compiledCell || 256;
+  const out = [];
+  for (const map of placeWorld.maps || []) {
+    for (const [row, first, last] of map.runs) {
+      out.push({ x: first * k, y: row * k, w: (last - first + 1) * k, h: k,
+                 kind: map.kind, name: map.name });
+    }
+  }
+  return out;
+}
+
+function placeSpan() {
+  // Enough of the world to show everything on it, with room to move into.
+  const k = placeTiles();
+  const boxes = placeOtherRects().concat(placeMine() || []);
+  const right = Math.max(PLACE_MIN_SPAN * k, ...boxes.map(b => b.x + b.w));
+  const down = Math.max(PLACE_MIN_SPAN * 0.62 * k, ...boxes.map(b => b.y + b.h));
+  return { w: right + PLACE_PAD * k, h: down + PLACE_PAD * k };
+}
+
+function placeScale() {
+  const canvas = document.getElementById('placeCanvas');
+  const span = placeSpan();
+  return Math.min(canvas.width / span.w, canvas.height / span.h);
+}
+
+function hits(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w
+      && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+function placeClashes(corner) {
+  if (!placeWorld) return [];
+  const k = placeTiles();
+  const mine = { x: corner.x * k, y: corner.y * k,
+                 w: placeWorld.map.w * k, h: placeWorld.map.h * k };
+  const names = new Set();
+  for (const rect of placeOtherRects()) {
+    if (hits(mine, rect)) names.add(rect.name);
+  }
+  return [...names];
+}
+
+function drawWorld() {
+  const canvas = document.getElementById('placeCanvas');
+  if (!canvas || !placeWorld) return;
+  const ctx = canvas.getContext('2d');
+  const k = placeScale();
+  const cell = placeTiles();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#0d100c';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // The grid, every ten cells, so distances are readable.
+  const span = placeSpan();
+  ctx.strokeStyle = '#1b211a';
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= span.w; x += cell * 10) {
+    ctx.beginPath(); ctx.moveTo(x * k, 0); ctx.lineTo(x * k, span.h * k); ctx.stroke();
+  }
+  for (let y = 0; y <= span.h; y += cell * 10) {
+    ctx.beginPath(); ctx.moveTo(0, y * k); ctx.lineTo(span.w * k, y * k); ctx.stroke();
+  }
+
+  // Every map on this PC: the game's own picture of it where there is one -
+  // Knox County as it really looks, down to the fields and the river - and
+  // the shape of its cells where there is not.
+  const mineNow = placeMine();
+  const drawn = new Set();
+  for (const map of placeWorld.maps || []) {
+    const shot = placePictures[map.name];
+    if (map.pictureBox && shot && shot.complete && shot.naturalWidth) {
+      const b = map.pictureBox;
+      ctx.drawImage(shot, b.x * k, b.y * k, b.w * k, b.h * k);
+      drawn.add(map.name);
+    }
+  }
+  for (const rect of placeOtherRects()) {
+    if (drawn.has(rect.name)) continue;
+    ctx.fillStyle = rect.kind === 'vanilla'
+      ? 'rgba(150,160,135,0.42)' : 'rgba(120,140,170,0.42)';
+    ctx.fillRect(rect.x * k, rect.y * k, Math.max(1, rect.w * k),
+                 Math.max(1, rect.h * k));
+  }
+  // ...labelled once each, under what they cover.
+  ctx.font = '13px system-ui, sans-serif';
+  for (const map of placeWorld.maps || []) {
+    const c = placeWorld.compiledCell || 256;
+    ctx.fillStyle = map.kind === 'vanilla' ? '#d6dcc8' : '#92a8c4';
+    ctx.fillText(map.name, map.x * c * k + 3, (map.y * c + map.h * c) * k + 14);
+  }
+
+  if (mineNow) {
+    const clash = placeClashes(placePicked || placeWorld.map);
+    const edge = clash.length ? '#dc5046' : '#a5e266';
+    if (placePreview && placePreview.complete && placePreview.naturalWidth) {
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(placePreview, mineNow.x * k, mineNow.y * k,
+                    mineNow.w * k, mineNow.h * k);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = clash.length ? 'rgba(220,80,70,0.35)' : 'rgba(165,226,102,0.35)';
+      ctx.fillRect(mineNow.x * k, mineNow.y * k, mineNow.w * k, mineNow.h * k);
+    }
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(mineNow.x * k, mineNow.y * k, mineNow.w * k, mineNow.h * k);
+    ctx.fillStyle = edge;
+    ctx.fillText('this map', mineNow.x * k + 3, (mineNow.y + mineNow.h) * k + 14);
+  }
+
+  // The road being drawn across the gap.
+  if (placeRoad.length) {
+    ctx.strokeStyle = '#f0b429';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    placeRoad.forEach(([x, y], i) => {
+      if (i) ctx.lineTo(x * k, y * k); else ctx.moveTo(x * k, y * k);
+    });
+    ctx.stroke();
+    ctx.fillStyle = '#f0b429';
+    for (const [x, y] of placeRoad) {
+      ctx.beginPath();
+      ctx.arc(x * k, y * k, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function placeSummary() {
+  const badge = document.getElementById('placeWhere');
+  if (!badge || !placeWorld) return;
+  const mine = placePicked || placeWorld.map;
+  badge.textContent = `(cell ${mine.x},${mine.y})`;
+}
+
+function placeFields() {
+  const mine = placePicked || (placeWorld && placeWorld.map);
+  if (!mine) return;
+  document.getElementById('placeX').value = mine.x;
+  document.getElementById('placeY').value = mine.y;
+  placeSummary();
+}
+
+function placeState() {
+  if (!placeWorld) return;
+  const mine = placePicked || placeWorld.map;
+  const clash = placeClashes(mine);
+  const tiles = placeTiles();
+  const where = `Cell ${mine.x},${mine.y} - world tile `
+    + `${mine.x * tiles},${mine.y * tiles}.`;
+  if (clash.length) {
+    placeNote(`${where} It would sit on top of ${clash.join(' and ')}, and the `
+      + 'game would read one map’s cells for the other.', true);
+  } else if (!placeWorld.lotsMatch) {
+    placeNote(`${where} The map has moved since it was compiled - compile it `
+      + 'again before installing.', true);
+  } else {
+    placeNote(where);
+  }
+}
+
+async function loadPlacement(mapName) {
+  const panel = document.getElementById('placePanel');
+  if (!panel || !mapName) return;
+  try {
+    placeWorld = await (await fetch(`/api/placement/${encodeURIComponent(mapName)}`)).json();
+  } catch {
+    return;                     // the step simply shows nothing about place
+  }
+  if (placeWorld.error) { placeWorld = null; return; }
+  placePicked = null;
+  placeRoad = [];
+  placeDrawingRoad = false;
+  placeLinkState();
+  // The game's own maps, each fetched once and kept for the next draw.
+  for (const map of placeWorld.maps || []) {
+    if (!map.picture || placePictures[map.name]) continue;
+    const shot = new Image();
+    shot.onload = drawWorld;
+    shot.onerror = () => { delete placePictures[map.name]; };
+    shot.src = `/api/world-picture/${encodeURIComponent(map.name)}`;
+    placePictures[map.name] = shot;
+  }
+  // The map as it came out, drawn in its place in the world.
+  placePreview = new Image();
+  placePreview.onload = drawWorld;
+  placePreview.onerror = () => { placePreview = null; };
+  placePreview.src = `/output/${encodeURIComponent(mapName)}/`
+    + `${encodeURIComponent(mapName)}_preview.png`;
+  drawWorld();
+  placeFields();
+  placeState();
+  sayIfInstallable();
+}
+
+function placeAt(ev) {
+  const canvas = document.getElementById('placeCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const k = placeScale();
+  const scale = canvas.width / rect.width;   // drawn at its own size, shown scaled
+  return [(ev.clientX - rect.left) * scale / k, (ev.clientY - rect.top) * scale / k];
+}
+
+function placeFromEvent(ev) {
+  const [tx, ty] = placeAt(ev);
+  const cell = placeTiles();
+  // Picked by the middle of the map rather than its corner: the pointer is
+  // where you want the town, not where its north-west cell happens to be.
+  return {
+    x: Math.max(0, Math.min(placeWorld.maxCell,
+                            Math.round(tx / cell - placeWorld.map.w / 2))),
+    y: Math.max(0, Math.min(placeWorld.maxCell,
+                            Math.round(ty / cell - placeWorld.map.h / 2))),
+  };
+}
+
+(() => {
+  const canvas = document.getElementById('placeCanvas');
+  if (!canvas) return;
+  const pick = ev => {
+    if (!placeWorld) return;
+    placePicked = placeFromEvent(ev);
+    drawWorld();
+    placeFields();
+    placeState();
+  };
+  canvas.addEventListener('pointerdown', ev => {
+    if (!placeWorld) return;
+    if (placeDrawingRoad) {
+      placeRoad.push(placeAt(ev).map(Math.round));
+      drawWorld();
+      placeLinkState();
+      return;
+    }
+    placeDragging = true;
+    canvas.setPointerCapture(ev.pointerId);
+    pick(ev);
+  });
+  canvas.addEventListener('pointermove', ev => { if (placeDragging) pick(ev); });
+  canvas.addEventListener('pointerup', () => { placeDragging = false; });
+  canvas.addEventListener('pointercancel', () => { placeDragging = false; });
+  canvas.addEventListener('dblclick', () => {
+    if (placeDrawingRoad) stopRoad();
+  });
+})();
+
+for (const id of ['placeX', 'placeY']) {
+  document.getElementById(id).addEventListener('change', () => {
+    if (!placeWorld) return;
+    placePicked = {
+      x: parseInt(document.getElementById('placeX').value, 10) || 0,
+      y: parseInt(document.getElementById('placeY').value, 10) || 0,
+    };
+    drawWorld();
+    placeSummary();
+    placeState();
+  });
+}
+
+// What the Install step says about being ready. A map moved after it was
+// compiled cannot be installed as it stands, and the placement panel above
+// the button may well be closed, so it is said here as well.
+function sayIfInstallable() {
+  const btn = document.getElementById('installBtn');
+  if (placeWorld && placeWorld.compiled && !placeWorld.lotsMatch) {
+    note('installNote', 'This map has been moved since it was compiled. '
+      + 'Compile it again, then install.', 'bad');
+    btn.disabled = true;
+    return false;
+  }
+  if (!btn.disabled) note('installNote', 'Ready to install.');
+  return true;
+}
+
+async function putMapAt(body) {
+  if (!currentMap) { placeNote('Open or generate a map first.', true); return; }
+  try {
+    const res = await fetch(`/api/placement/${encodeURIComponent(currentMap)}`, body);
+    const out = await res.json();
+    if (!res.ok) throw apiError(out, res);
+    placeWorld = out;
+    placePicked = null;
+    drawWorld();
+    placeFields();
+    const moved = out.moved || {};
+    sayIfInstallable();
+    if (moved.needsCompile) {
+      placeNote(`Moved to cell ${out.map.x},${out.map.y}. `
+        + `${(moved.rewrote || []).length} files re-pointed - compile the map `
+        + 'again, then install.', true);
+      fx.toast('ok', 'Map moved', 'Compile it again before installing.');
+    } else {
+      placeState();
+      fx.toast('ok', 'Map placed', `It will be built at cell ${out.map.x},${out.map.y}.`);
+    }
+  } catch (err) {
+    placeNote(err.message, true);
+  }
+}
+
+document.getElementById('placeApply').addEventListener('click', () => {
+  const mine = placePicked || (placeWorld && placeWorld.map);
+  if (!mine) return;
+  putMapAt({ method: 'POST', headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ cell_x: mine.x, cell_y: mine.y }) });
+});
+
+document.getElementById('placeAuto').addEventListener('click', () =>
+  putMapAt({ method: 'DELETE' }));
+
+// ---- a road from one map to the next -----------------------------------------
+//
+// Two maps in the same world have empty grid between them: no ground, no road,
+// nothing to drive along. A road drawn across that gap becomes a map of its own
+// - a strip of ground with a road down it, pinned to the cells it crosses - so
+// it is built, compiled and installed by the same steps as any other map, and
+// the game joins the three of them into one world.
+function linkBox() {
+  if (placeRoad.length < 2) return null;
+  const cell = placeTiles();
+  const xs = placeRoad.map(p => p[0]), ys = placeRoad.map(p => p[1]);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs) / cell) - LINK_MARGIN_CELLS);
+  const y0 = Math.max(0, Math.floor(Math.min(...ys) / cell) - LINK_MARGIN_CELLS);
+  const x1 = Math.ceil(Math.max(...xs) / cell) + LINK_MARGIN_CELLS;
+  const y1 = Math.ceil(Math.max(...ys) / cell) + LINK_MARGIN_CELLS;
+  return trimLink({ x: x0, y: y0,
+                    w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) });
+}
+
+// The strip of ground a road is drawn on is a map like any other, and two maps
+// may not share a cell: whichever the game reads second wins and the other's
+// ground is simply not there. So the strip is trimmed back out of everything
+// already on the world, cell by cell, before it is built.
+//
+// It can only be trimmed to whole cells of its own, and the vanilla map's
+// cells are 256 tiles against this grid's 300, so a road laid up against Knox
+// County stops a little short of it. Between two KnoxMap maps, both on the
+// same grid, it meets them exactly.
+function placeMapBoxes() {
+  // Whole maps rather than their runs of cells: a strip of road is trimmed
+  // out of a map, not threaded through the bites out of its edge.
+  if (!placeWorld) return [];
+  const c = placeWorld.compiledCell || 256;
+  return (placeWorld.maps || []).map(m => ({
+    x: m.x * c, y: m.y * c, w: m.w * c, h: m.h * c, name: m.name }));
+}
+
+function trimLink(box) {
+  const cell = placeTiles();
+  const others = placeMapBoxes().concat(placeMine() || []);
+  let { x, y, w, h } = box;
+  for (let pass = 0; pass < 8 && w > 0 && h > 0; pass += 1) {
+    const me = { x: x * cell, y: y * cell, w: w * cell, h: h * cell };
+    const hit = others.find(r => hits(me, r));
+    if (!hit) break;
+    // Trimmed on whichever side it pokes in least far, so a road laid along a
+    // map keeps its length and one laid at its edge keeps its width.
+    const sides = [
+      ['left', Math.ceil((hit.x + hit.w - me.x) / cell)],
+      ['right', Math.ceil((me.x + me.w - hit.x) / cell)],
+      ['top', Math.ceil((hit.y + hit.h - me.y) / cell)],
+      ['bottom', Math.ceil((me.y + me.h - hit.y) / cell)],
+    ].filter(([, by]) => by > 0).sort((a, b) => a[1] - b[1]);
+    if (!sides.length) break;
+    const [side, by] = sides[0];
+    if (side === 'left') { x += by; w -= by; }
+    else if (side === 'right') { w -= by; }
+    else if (side === 'top') { y += by; h -= by; }
+    else { h -= by; }
+  }
+  if (w <= 0 || h <= 0) return null;
+  return { x, y, w, h, trimmed: x !== box.x || y !== box.y
+                                || w !== box.w || h !== box.h };
+}
+
+function placeLinkState() {
+  const draw = document.getElementById('placeRoad');
+  const make = document.getElementById('placeLink');
+  const undo = document.getElementById('placeRoadUndo');
+  if (!draw) return;
+  draw.textContent = placeDrawingRoad ? 'Finish the road' : 'Draw a road';
+  draw.classList.toggle('is-on', placeDrawingRoad);
+  const box = linkBox();
+  make.disabled = !box;
+  undo.disabled = !placeRoad.length;
+  if (!placeRoad.length) return;
+  if (!box) {
+    placeNote('Click once more: a road needs at least two points.');
+    return;
+  }
+  const cells = box.w * box.h;
+  const trimmed = box.trimmed
+    ? ' Trimmed back out of the maps it crossed - two maps cannot share a cell.'
+    : '';
+  placeNote(`A road of ${placeRoad.length} points across ${box.w}×${box.h} `
+    + `cells (${cells} in all)${cells > LINK_MAX_CELLS
+      ? ' - that is a map, not a road. Draw a straighter one.' : '.'}${trimmed}`,
+    cells > LINK_MAX_CELLS);
+}
+
+function stopRoad() {
+  placeDrawingRoad = false;
+  placeLinkState();
+}
+
+document.getElementById('placeRoad').addEventListener('click', () => {
+  if (placeDrawingRoad) { stopRoad(); return; }
+  placeDrawingRoad = true;
+  placeRoad = [];
+  drawWorld();
+  placeLinkState();
+  placeNote('Click along the road, from your map to the one you want to reach. '
+    + 'Double-click to finish.');
+});
+
+document.getElementById('placeRoadUndo').addEventListener('click', () => {
+  placeRoad.pop();
+  drawWorld();
+  placeLinkState();
+});
+
+document.getElementById('placeLink').addEventListener('click', async () => {
+  const box = linkBox();
+  if (!box || !currentMap) return;
+  const btn = document.getElementById('placeLink');
+  btn.disabled = true;
+  placeNote('Laying out the road…');
+  try {
+    // The sheet is worked out on the server: the cells the road may use, the
+    // scale of the map it joins, and the country either side of it.
+    const res = await fetch(`/api/placement/${encodeURIComponent(currentMap)}/link`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: placeRoad,
+                             kind: document.getElementById('placeRoadKind').value }),
+    });
+    const plan = await res.json();
+    if (!res.ok) throw apiError(plan, res);
+    placeNote(`Building ${plan.box.w}×${plan.box.h} cells of road and `
+      + `country at ${plan.metersPerTile} m a tile…`);
+    const made = await fetch('/api/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mapName: plan.name, design: plan.design,
+                             metersPerTile: plan.metersPerTile,
+                             // Drawn where it was drawn: straightened to the
+                             // tile grid, a road sloping across the gap comes
+                             // out flat and meets the next map in the wrong
+                             // place.
+                             settings: { preset: 'rural', align_streets: 0,
+                                         rotate_degrees: 0,
+                                         straight_roads: 0 } }),
+    });
+    const map = await made.json();
+    if (!made.ok) throw apiError(map, made);
+    // Pinned where it was drawn, or the road would be packed in beside the
+    // other maps instead of between them.
+    const put = await fetch(`/api/placement/${encodeURIComponent(plan.name)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cell_x: plan.box.x, cell_y: plan.box.y }) });
+    if (!put.ok) throw apiError(await put.json(), put);
+    placeRoad = [];
+    placeDrawingRoad = false;
+    drawWorld();
+    placeLinkState();
+    placeNote(`"${plan.name}" made: ${map.width} × ${map.height} tiles at `
+      + `cell ${plan.box.x},${plan.box.y}, with ${plan.scenery} woods, fields `
+      + 'and hedges along it. Open it under Your maps, generate its buildings, '
+      + 'compile and install it beside this one.');
+    fx.toast('ok', 'Road made', `${plan.name} is ready to build and compile.`);
+    loadMaps();
+  } catch (err) {
+    placeNote(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});

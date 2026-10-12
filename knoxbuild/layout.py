@@ -147,7 +147,7 @@ ROOM_STYLE = {
     # as strips about four tiles deep, and a sofa with a walkway round it does
     # not fit in four tiles - against the wall is what a flat that size really
     # has, and the centre group takes over in the ones with room for it.
-    "openplan": (C.FLOOR_WOOD, "Living Room",
+    "openplan": (C.FLOOR_WOOD, "Living Room (open plan)",
                  ["fridge", "stove", "kitchen_sink", "counter", "counter",
                   "sofa", "tv", "shelf", "plant", "painting"]),
     "bedroom": (C.FLOOR_CARPET_BLUE, "Bedroom",
@@ -177,7 +177,7 @@ ROOM_STYLE = {
                    "chair", "stove", "chair"]),
     "schoolstorage": (C.FLOOR_LINO, "School Storage",
                       ["shelf", "crate", "metal_rack", "crate", "bookshelf"]),
-    "sportstorage": (C.FLOOR_LINO, "Sports Store",
+    "sportstorage": (C.FLOOR_LINO, "Sports Store Stockroom",
                      ["metal_rack", "crate", "shelf", "crate"]),
     "janitor": (C.FLOOR_LINO, "Janitor",
                 ["shelf", "crate", "sink", "metal_rack"]),
@@ -240,7 +240,7 @@ ROOM_STYLE = {
     # What OpenStreetMap says a ground floor is (knoxbuild/uses.py), by the
     # game's own room names so the loot fits: eating places and their
     # kitchens, and the other shops and services of a high street.
-    "restaurantdining": (C.FLOOR_TILE_CHECK, "Restaurant",
+    "restaurantdining": (C.FLOOR_TILE_CHECK, "Restaurant Dining",
                          ["plant", "painting", "plant"]),
     "italianrestaurant": (C.FLOOR_WOOD, "Italian Restaurant",
                           ["plant", "painting", "bookshelf", "plant"]),
@@ -251,7 +251,7 @@ ROOM_STYLE = {
     **{k: (C.FLOOR_TILE_PALE, label,
            ["stove", "stove_alt", "fridge", "kitchen_sink", "shop_fridge_double", "metal_rack",
             "crate", "stove"])
-       for k, label in (("restaurantkitchen", "Kitchen"), ("pizzakitchen", "Pizza Kitchen"),
+       for k, label in (("restaurantkitchen", "Restaurant Kitchen"), ("pizzakitchen", "Pizza Kitchen"),
                         ("burgerkitchen", "Burger Kitchen"), ("dinerkitchen", "Diner Kitchen"),
                         ("chinesekitchen", "Chinese Kitchen"), ("sushikitchen", "Sushi Kitchen"),
                         ("mexicankitchen", "Mexican Kitchen"), ("seafoodkitchen", "Seafood Kitchen"),
@@ -327,7 +327,7 @@ ROOM_STYLE = {
            ("candystore", C.FLOOR_TILE_CHECK, "Candy Store"), ("butcher", C.FLOOR_TILE_PALE, "Butcher"),
            ("departmentstore", C.FLOOR_TILE_PALE, "Department Store"),
            ("jewelrystore", C.FLOOR_CARPET_RED, "Jewelry Store"),
-           ("camerastore", C.FLOOR_TILE_PALE, "Electronics Store"),
+           ("camerastore", C.FLOOR_TILE_PALE, "Camera Store"),
            ("musicstore", C.FLOOR_WOOD, "Music Store"), ("movierental", C.FLOOR_CARPET_BLUE, "Video Store"),
            ("gunstore", C.FLOOR_LINO, "Gun Store"), ("sportstore", C.FLOOR_WOOD, "Sports Store"),
            ("gardenstore", C.FLOOR_LINO, "Garden Store"),
