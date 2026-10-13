@@ -2698,6 +2698,14 @@ let boardOpened = null;         // the map whose sheet this is, once it has one
 let boardFitted = false;        // whether the sheet has been framed on screen
 
 const BOARD_GRID_M = 100;
+// How near a point has to come to something before it is taken to mean it:
+// the street of the map next door, or a corner of what is already drawn.
+// Over about a tile and a half the map reads as joined up.
+const BOARD_SNAP_M = 14;
+
+let boardJoin = null;           // the map this sheet is drawn to join
+let boardJoinLayers = null;     // its picture, its outline and its streets
+let boardEditing = false;       // whether what is drawn can be dragged about
 
 function boardSize() {
   const w = parseFloat(document.getElementById('boardWidth').value) || 900;
@@ -2710,11 +2718,41 @@ function boardNote(text) {
   if (box) box.textContent = text || '';
 }
 
+// The game stores a map in cells of 300 tiles and nothing finer: two maps are
+// neighbours on a cell boundary or not at all (knoxbuild/world.py, CELL_SIZE).
+// A sheet that is not whole cells is built with empty ground round it - the
+// drawing is centred in what the cells leave - so its streets stop short of
+// the edge and nothing of the map next door lines up with them.
+const BOARD_CELL_TILES = 300;
+
+function boardCellMetres() {
+  return BOARD_CELL_TILES * readScale();
+}
+
+// The sheet in cells, and whether it comes out exactly: {x, y, exact}.
+function boardCells() {
+  const { w, h } = boardSize();
+  const cell = boardCellMetres();
+  const across = w / cell;
+  const down = h / cell;
+  return { x: Math.ceil(across - 1e-6), y: Math.ceil(down - 1e-6),
+           exact: Math.abs(across - Math.round(across)) < 1e-6
+                  && Math.abs(down - Math.round(down)) < 1e-6 };
+}
+
 function boardShowCount() {
   const n = boardLayer ? boardLayer.getLayers().length : 0;
   const badge = document.getElementById('boardCount');
   const { w, h } = boardSize();
-  if (badge) badge.textContent = `${w} × ${h} m · ${n} thing${n === 1 ? '' : 's'}`;
+  const cells = boardCells();
+  const fit = document.getElementById('boardFitCells');
+  if (fit) fit.hidden = cells.exact;
+  if (badge) {
+    badge.textContent = `${w} × ${h} m · ${n} thing${n === 1 ? '' : 's'} · `
+      + (cells.exact ? `${cells.x} × ${cells.y} cells`
+                     : `built as ${cells.x} × ${cells.y} cells with empty `
+                       + 'ground round it');
+  }
 }
 
 // The sheet's edge and a grid every hundred metres, so a street can be put
@@ -2762,14 +2800,191 @@ function boardStyleFor(kind) {
   return sketchStyle(kind);
 }
 
+// ---- the map next door ------------------------------------------------------
+// A sheet is nowhere until it is put somewhere, and a street drawn on one
+// stops dead at the edge. Pick a map already built and the sheet is drawn
+// against it: that map beside this one at the right size, and the streets
+// that reach the border they share marked on this sheet's own edge. Draw a
+// road to one of those and it snaps onto it, and the built map is put beside
+// its neighbour in the world, so the two really do join.
+
+function boardJoinSide() {
+  return document.getElementById('boardJoinSide').value || 'E';
+}
+
+// Where the neighbour's sheet lies, in the board's own metres: beside this
+// one, corners lined up on the side they share.
+function boardNeighbourBounds(data) {
+  const { w, h } = boardSize();
+  const side = boardJoinSide();
+  const nw = data.widthM || 0;
+  const nh = data.heightM || 0;
+  if (side === 'E') return [[h - nh, -nw], [h, 0]];
+  if (side === 'W') return [[h - nh, w], [h, w + nw]];
+  if (side === 'N') return [[-nh, 0], [0, nw]];
+  return [[h, 0], [h + nh, nw]];          // this sheet is south of it
+}
+
+function boardClearJoin() {
+  if (boardJoinLayers) boardMap.removeLayer(boardJoinLayers);
+  boardJoinLayers = null;
+}
+
+function boardDrawJoin() {
+  boardClearJoin();
+  if (!boardJoin) return;
+  const group = L.layerGroup().addTo(boardMap);
+  const bounds = boardNeighbourBounds(boardJoin);
+  if (boardJoin.preview) {
+    L.imageOverlay(boardJoin.preview, bounds,
+                   { pane: 'boardTracePane', opacity: 0.75, interactive: false })
+      .addTo(group);
+  }
+  L.rectangle(bounds, { color: '#6fa8dc', weight: 1, dashArray: '6,4',
+                        fill: !boardJoin.preview, fillColor: '#16202a',
+                        fillOpacity: 0.5, interactive: false }).addTo(group);
+  for (const join of boardJoin.joins || []) {
+    L.circleMarker([join.y, join.x], {
+      radius: 5, color: '#ffd37a', weight: 2, fillColor: '#ffd37a',
+      fillOpacity: 0.9, interactive: false,
+    }).addTo(group).bindTooltip(`a street of ${escapeHtml(boardJoin.name)} `
+      + `arrives here, ${join.width} m wide`, { sticky: true });
+  }
+  boardJoinLayers = group;
+}
+
+async function boardLoadJoin() {
+  const name = document.getElementById('boardJoin').value;
+  const note = document.getElementById('boardJoinNote');
+  document.getElementById('boardMatchEdge').disabled = !name;
+  if (!name) {
+    boardJoin = null;
+    boardClearJoin();
+    note.textContent = 'A map of its own, with nothing beside it.';
+    return;
+  }
+  const { w, h } = boardSize();
+  try {
+    const res = await fetch(`/api/board/join/${encodeURIComponent(name)}`
+      + `?side=${boardJoinSide()}&w=${w}&h=${h}`);
+    const data = await res.json();
+    if (!res.ok) throw apiError(data, res);
+    boardJoin = data;
+    boardDrawJoin();
+    const n = (data.joins || []).length;
+    note.textContent = n
+      ? `${n} street${n === 1 ? '' : 's'} of ${name} reach${n === 1 ? 'es' : ''} `
+        + 'this sheet. Draw a road to one and it joins up.'
+      : `${name} has no street on that side. The sheet still goes beside it.`;
+  } catch (err) {
+    boardJoin = null;
+    boardClearJoin();
+    note.textContent = err.message;
+  }
+}
+
+// Everything a point could be meant to meet: the neighbour's streets, and the
+// corners of what is already on the sheet.
+function boardSnapPoints(skip) {
+  const out = [];
+  for (const join of (boardJoin && boardJoin.joins) || []) {
+    out.push([join.y, join.x]);
+  }
+  boardLayer.eachLayer(layer => {
+    if (layer === skip || !layer.boardKind) return;
+    const latlngs = layer.getLatLngs ? layer.getLatLngs() : null;
+    const flat = latlngs ? (Array.isArray(latlngs[0]) ? latlngs[0] : latlngs) : [];
+    for (const p of flat) out.push([p.lat, p.lng]);
+    if (!latlngs && layer.getLatLng) {
+      const p = layer.getLatLng();
+      out.push([p.lat, p.lng]);
+    }
+  });
+  return out;
+}
+
+// Move the ends of what was just drawn onto whatever they were aimed at.
+// Done when the shape is finished rather than while it is being drawn: the
+// result is the same and the drawing stays the plain Leaflet one.
+function boardSnap(layer) {
+  if (!document.getElementById('boardSnap').checked) return 0;
+  const targets = boardSnapPoints(layer);
+  if (!targets.length || !layer.getLatLngs) return 0;
+  const latlngs = layer.getLatLngs();
+  const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
+  let moved = 0;
+  for (const point of ring) {
+    let best = null;
+    let far = BOARD_SNAP_M;
+    for (const [lat, lng] of targets) {
+      const d = Math.hypot(point.lat - lat, point.lng - lng);
+      if (d > 0 && d <= far) { far = d; best = [lat, lng]; }
+    }
+    if (best) {
+      point.lat = best[0];
+      point.lng = best[1];
+      moved += 1;
+    }
+  }
+  if (moved) layer.setLatLngs(latlngs);
+  return moved;
+}
+
+// How long or how big the thing is, in the units somebody drawing a town
+// thinks in.
+function boardMeasure(layer) {
+  const latlngs = layer.getLatLngs && layer.getLatLngs();
+  if (!latlngs) return '';
+  const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
+  if (ring.length < 2) return '';
+  if (layer instanceof L.Polygon) {
+    let twice = 0;
+    for (let i = 0; i < ring.length; i += 1) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      twice += a.lng * b.lat - b.lng * a.lat;
+    }
+    const area = Math.abs(twice) / 2;
+    return area >= 10000 ? `${(area / 10000).toFixed(2)} ha`
+                         : `${Math.round(area)} m²`;
+  }
+  let run = 0;
+  for (let i = 1; i < ring.length; i += 1) {
+    run += Math.hypot(ring[i].lat - ring[i - 1].lat, ring[i].lng - ring[i - 1].lng);
+  }
+  return `${Math.round(run)} m long`;
+}
+
 function boardAdd(kind, layer, silent) {
   layer.boardKind = kind;
   if (layer.setStyle) layer.setStyle(boardStyleFor(kind));
   layer.bindTooltip(sketchLabel(kind), { sticky: true });
   layer.on('click', ev => { L.DomEvent.stop(ev); boardPick(layer); });
   boardLayer.addLayer(layer);
+  if (boardEditing) boardLetDrag(layer, true);
   boardShowCount();
   if (!silent) boardNote(`${sketchLabel(kind)} added.`);
+}
+
+// Dragging corners about rather than drawing the whole thing again, which
+// was the only way to move a street a few metres.
+function boardLetDrag(layer, on) {
+  // A line or a shape has corners to drag; a point is dragged whole.
+  const handle = layer.editing || layer.dragging;
+  if (!handle) return;
+  if (on) handle.enable();
+  else handle.disable();
+}
+
+function boardEditMode(on) {
+  boardEditing = on;
+  if (on) boardStop();
+  boardLayer.eachLayer(layer => boardLetDrag(layer, on));
+  const btn = document.getElementById('boardEdit');
+  if (btn) btn.classList.toggle('on', on);
+  boardNote(on ? 'Drag a corner to move it, or the middle of a line to add '
+                 + 'one. Click Move and reshape again to stop.'
+               : 'Back to drawing.');
 }
 
 function boardPick(layer) {
@@ -2777,11 +2992,15 @@ function boardPick(layer) {
     boardPicked.setStyle(boardStyleFor(boardPicked.boardKind));
   }
   boardPicked = layer;
+  const dupe = document.getElementById('boardDupe');
+  if (dupe) dupe.disabled = !layer;
   const box = document.getElementById('boardPicked');
   if (!layer) { box.hidden = true; box.innerHTML = ''; return; }
   layer.setStyle({ color: '#ff5f5f', weight: 4 });
   box.hidden = false;
-  box.innerHTML = `<span class="hint">${escapeHtml(sketchLabel(layer.boardKind))}</span>
+  const size = boardMeasure(layer);
+  box.innerHTML = `<span class="hint">${escapeHtml(sketchLabel(layer.boardKind))}`
+    + `${size ? ` · ${size}` : ''}</span>
     <button type="button" id="boardDelete" class="btn">Remove</button>`;
   document.getElementById('boardDelete').addEventListener('click', () => {
     boardLayer.removeLayer(layer);
@@ -2896,7 +3115,13 @@ function boardOpen(mapName) {
     boardMap.on(L.Draw.Event.CREATED, e => {
       const kind = boardKind;
       boardStop();
-      if (kind) boardAdd(kind, e.layer);
+      if (!kind) return;
+      const joined = boardSnap(e.layer);
+      boardAdd(kind, e.layer);
+      if (joined) {
+        boardNote(`${sketchLabel(kind)} added, ${joined} `
+          + `end${joined === 1 ? '' : 's'} joined up.`);
+      }
     });
     // The first size the map gets may arrive after it was opened, if the
     // window was behind another one at the time.
@@ -2911,7 +3136,12 @@ function boardOpen(mapName) {
       document.getElementById(id).addEventListener('change', () => {
         boardDrawSheet();
         boardFit();
+        boardLoadJoin();           // the sheet moved under its neighbour
       });
+    }
+    // Which map this sheet is drawn against, and which way round.
+    for (const id of ['boardJoin', 'boardJoinSide']) {
+      document.getElementById(id).addEventListener('change', boardLoadJoin);
     }
   }
   boardMap.invalidateSize();     // it was created inside a hidden panel
@@ -2920,6 +3150,7 @@ function boardOpen(mapName) {
   boardFit();
   boardOpened = mapName || null;
   if (mapName) document.getElementById('boardName').value = mapName;
+  boardFillJoins(mapName);
   boardNote('Pick a tool and draw. Nothing is downloaded: this is your own map.');
 }
 
@@ -2938,8 +3169,99 @@ document.getElementById('boardOpen').addEventListener('click', async () => {
   }
 });
 
+// Every map already built is somewhere this sheet could go next to - except
+// the one being drawn, which cannot be its own neighbour.
+async function boardFillJoins(mine) {
+  const box = document.getElementById('boardJoin');
+  const was = box.value;
+  try {
+    const data = await (await fetch('/api/maps')).json();
+    const names = (data.maps || []).map(m => m.mapName || m.name)
+      .filter(n => n && n !== mine);
+    box.innerHTML = ['<option value="">nothing - a map of its own</option>']
+      .concat(names.map(n =>
+        `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`)).join('');
+    if (names.includes(was)) box.value = was;
+  } catch {
+    /* no maps to join: the sheet is simply a map of its own */
+  }
+  boardLoadJoin();
+}
+
+document.getElementById('boardFitCells').addEventListener('click', () => {
+  // Up to the next whole cell, never down: rounding down would cut off
+  // whatever is drawn out there.
+  const cell = boardCellMetres();
+  const cells = boardCells();
+  document.getElementById('boardWidth').value = Math.round(cells.x * cell);
+  document.getElementById('boardHeight').value = Math.round(cells.y * cell);
+  boardDrawSheet();
+  boardFit();
+  boardLoadJoin();
+  boardNote(`Sheet is ${cells.x} × ${cells.y} whole cells now, so its edges `
+    + 'are the edges of the built map and a street can run right up to one.');
+});
+
+document.getElementById('boardMatchEdge').addEventListener('click', () => {
+  // The sheet made as long as the border it shares, so nothing of the
+  // neighbour is left looking out onto nothing.
+  if (!boardJoin) return;
+  const side = boardJoinSide();
+  const across = side === 'E' || side === 'W' ? 'boardHeight' : 'boardWidth';
+  const metres = side === 'E' || side === 'W' ? boardJoin.heightM : boardJoin.widthM;
+  if (!metres) return;
+  document.getElementById(across).value = Math.round(metres);
+  boardDrawSheet();
+  boardFit();
+  boardLoadJoin();
+  boardNote(`Sheet matched to ${boardJoin.name}: ${Math.round(metres)} m along `
+    + 'the side they share.');
+});
+
+document.getElementById('boardEdit').addEventListener('click', () =>
+  boardEditMode(!boardEditing));
+
+document.getElementById('boardDupe').addEventListener('click', () => {
+  if (!boardPicked) return;
+  const kind = boardPicked.boardKind;
+  const shift = ([lat, lng]) => [lat - 20, lng + 20];
+  let copy = null;
+  if (boardPicked.getLatLngs) {
+    const latlngs = boardPicked.getLatLngs();
+    const ring = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
+    const moved = ring.map(p => shift([p.lat, p.lng]));
+    copy = boardPicked instanceof L.Polygon ? L.polygon(moved) : L.polyline(moved);
+  } else if (boardPicked.getLatLng) {
+    const p = boardPicked.getLatLng();
+    copy = L.marker(shift([p.lat, p.lng]));
+  }
+  if (!copy) return;
+  boardAdd(kind, copy, true);
+  boardPick(copy);
+  boardNote(`${sketchLabel(kind)} copied, twenty metres along.`);
+});
+
+// Delete takes out what is picked; Escape stops drawing, as it does
+// everywhere else.
+document.addEventListener('keydown', ev => {
+  if (document.getElementById('board').hidden) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target.tagName || ''));
+  if (typing) return;
+  if (ev.key === 'Escape' && boardKind) {
+    boardStop();
+    boardNote('Stopped drawing.');
+  } else if ((ev.key === 'Delete' || ev.key === 'Backspace') && boardPicked) {
+    const gone = boardPicked;
+    boardPick(null);
+    boardLayer.removeLayer(gone);
+    boardShowCount();
+    boardNote('Removed.');
+  }
+});
+
 document.getElementById('boardClose').addEventListener('click', () => {
   boardStop();
+  if (boardEditing) boardEditMode(false);
   document.getElementById('board').hidden = true;
 });
 
@@ -3061,7 +3383,24 @@ document.getElementById('boardBuild').addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) throw apiError(data, res);
-    boardNote(`${name} built: ${data.width} × ${data.height} tiles.`);
+    let note = `${name} built: ${data.width} × ${data.height} tiles.`;
+    const beside = document.getElementById('boardJoin').value;
+    if (beside) {
+      // Drawn against a map, so it is put beside that map rather than
+      // wherever there happened to be room.
+      try {
+        const put = await fetch('/api/board/place-beside', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ map: name, neighbour: beside,
+                                 side: boardJoinSide() }) });
+        const where = await put.json();
+        if (!put.ok) throw apiError(where, put);
+        note += ` Put beside ${beside}, at cell ${where.map.x},${where.map.y}.`;
+      } catch (err) {
+        note += ` It could not be put beside ${beside}: ${err.message}`;
+      }
+    }
+    boardNote(note);
     fx.toast('ok', 'Map built', `${name}: ${data.width} × ${data.height} tiles.`);
     document.getElementById('board').hidden = true;
     renderResults(data);

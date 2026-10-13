@@ -363,7 +363,8 @@ def stack(design: dict, settings: Settings | None = None,
     storeys = []
     for level in wanted:
         plan = L.Plan(width=design["width"], height=design["height"],
-                      rooms=_rooms_of(design, level), core=core, kind=kind)
+                      rooms=_rooms_of(design, level), core=core, kind=kind,
+                      drawn=True)
         L._paint(plan)
         if not plan.rooms:
             storeys.append(plan)

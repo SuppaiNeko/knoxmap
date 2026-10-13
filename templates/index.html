@@ -469,12 +469,16 @@
       <input type="text" id="boardName" placeholder="my_town" size="12"></label>
     <span class="board-spacer"></span>
     <span id="boardCount" class="hint"></span>
+    <button type="button" id="boardFitCells" class="btn" hidden
+            title="Round the sheet to whole 300-tile cells, so its edges are the map's edges">Fit to cells</button>
     <button type="button" id="boardTrace" class="btn">Background image</button>
     <input id="boardTraceFile" type="file" accept="image/*" hidden>
     <label class="board-size" id="boardTraceFade" hidden>Fade
       <input type="range" id="boardTraceOpacity" min="0.1" max="1" step="0.05"
              value="0.55"></label>
     <button type="button" id="boardTraceOff" class="btn" hidden>Remove image</button>
+    <button type="button" id="boardEdit" class="btn">Move and reshape</button>
+    <button type="button" id="boardDupe" class="btn" disabled>Duplicate</button>
     <button type="button" id="boardUndo" class="btn">Undo</button>
     <button type="button" id="boardClear" class="btn">Clear</button>
     <button type="button" id="boardSave" class="btn">Save</button>
@@ -484,7 +488,32 @@
   <div class="board-body">
     <aside class="board-tools">
       <p class="hint">Click a tool, then click on the sheet to draw.
-        Double-click to finish a line or a shape.</p>
+        Double-click to finish a line or a shape. Click a thing to pick it;
+        Delete removes it, Escape stops drawing.</p>
+      <!-- A sheet that joins a map already built: the map next door is shown
+           beside it and the streets that reach their shared border are marked
+           on this sheet's edge, so a road drawn to one of them meets it. -->
+      <details id="boardJoinPanel">
+        <summary>Join a map you have built</summary>
+        <label class="board-side-row">Next to
+          <select id="boardJoin"><option value="">nothing - a map of its own</option></select>
+        </label>
+        <label class="board-side-row">This sheet is
+          <select id="boardJoinSide">
+            <option value="E">east of it</option>
+            <option value="W">west of it</option>
+            <option value="N">north of it</option>
+            <option value="S">south of it</option>
+          </select>
+        </label>
+        <button type="button" id="boardMatchEdge" class="btn" disabled>Match
+          its edge</button>
+        <p class="hint" id="boardJoinNote">Its streets are marked on the edge
+          they share with this sheet. Draw a road to one and it snaps onto it;
+          the map is put beside it in the world when it is built.</p>
+      </details>
+      <label class="check board-snap"><input type="checkbox" id="boardSnap" checked>
+        Snap to the streets it joins, and to what is already drawn</label>
       <input type="search" id="boardFind" class="list-search" hidden
              autocomplete="off" placeholder="Search what to draw">
       <div id="boardPalette" class="sketch-palette"></div>

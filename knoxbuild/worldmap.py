@@ -111,7 +111,15 @@ def write(out_dir: str, map_name: str, proj, info: dict,
         else osm.cache_path(out_dir, map_name)
     wanted = tuple(info["osm_bbox"]) if info.get("osm_bbox") else \
         (bbox.get("south"), bbox.get("west"), bbox.get("north"), bbox.get("east"))
-    feats = osm.load_cache(cache, wanted) or []
+    # Whatever download is beside the map, however old the filter list it was
+    # fetched with. This step never fetches one, so turning an older file away
+    # does not get the newer tags - it writes a map with the buildings on it
+    # and not one road, river or wood.
+    feats = osm.load_cache(cache, wanted, filters=None) or []
+    if not feats:
+        print(f"  paper map           : no download beside the map "
+              f"({os.path.basename(cache)}), so it has buildings only - "
+              f"generate the map again to put the streets back")
     if info.get("straight_roads"):
         # The streets as the map drew them, not as they are.
         from generator.octilinear import straighten_roads

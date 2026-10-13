@@ -1575,6 +1575,84 @@ def api_design(name: str):
                              "north": north, "east": east}})
 
 
+# ---- drawing a map that joins one already built ----------------------------
+#
+# The drawing board has no world under it, which is the point of it and also
+# means a street drawn on it stops dead at the edge. These two give it the map
+# next door: where that map's roads leave the side they share, so the drawing
+# can be made to meet them, and the ground it stands on afterwards, so the two
+# really are neighbours in the game.
+
+@app.route("/api/board/join/<name>")
+def api_board_join(name: str):
+    """A built map, as the drawing board needs to see it.
+
+    `side` is where the new sheet goes - "E" means east of this map - and
+    `w`/`h` are the sheet in metres, so the roads come back as points on it.
+    """
+    from knoxbuild import joins
+    from knoxbuild import placement as P
+
+    map_dir = _map_dir(name)
+    if map_dir is None:
+        return jsonify({"error": "Bad map name."}), 400
+    side = (request.args.get("side") or "E").upper()
+    try:
+        sheet_w = float(request.args.get("w") or 900)
+        sheet_h = float(request.args.get("h") or 900)
+        out = joins.sheet_joins(str(map_dir), map_dir.name, side, sheet_w, sheet_h)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    where = P.saved(str(map_dir)) or P.project_origin(str(map_dir), map_dir.name)
+    cells_w, cells_h = P.project_size(str(map_dir), map_dir.name)
+    out["cells"] = ({"x": where[0], "y": where[1], "w": cells_w, "h": cells_h}
+                    if where else None)
+    out["cellTiles"] = P.CELL_SIZE
+    preview = map_dir / f"{map_dir.name}_preview.png"
+    out["preview"] = (f"/output/{map_dir.name}/{preview.name}"
+                      if preview.exists() else None)
+    return jsonify(out)
+
+
+@app.route("/api/board/place-beside", methods=["POST"])
+def api_board_place_beside():
+    """Put a map that has just been built next to the one it was drawn to
+    join, so the street that meets its border meets it in the game too."""
+    from knoxbuild import joins
+    from knoxbuild import placement as P
+
+    body = _json_body()
+    mine = _map_dir(str(body.get("map") or ""))
+    theirs = _map_dir(str(body.get("neighbour") or ""))
+    side = str(body.get("side") or "E").upper()
+    if mine is None or theirs is None:
+        return jsonify({"error": "Bad map name."}), 400
+    if side not in joins.SIDES:
+        return jsonify({"error": f"A map has four sides, not {side}."}), 400
+    where = P.saved(str(theirs)) or P.project_origin(str(theirs), theirs.name)
+    if not where:
+        return jsonify({"error": f"{theirs.name} has no place in the world "
+                                 f"yet, so there is nothing to sit beside."}), 400
+    their_w, their_h = P.project_size(str(theirs), theirs.name)
+    my_w, my_h = P.project_size(str(mine), mine.name)
+    # Corners line up on the side they share, which is what makes the streets
+    # across the border line up too.
+    cell = {"E": (where[0] + their_w, where[1]),
+            "W": (where[0] - my_w, where[1]),
+            "S": (where[0], where[1] + their_h),
+            "N": (where[0], where[1] - my_h)}[side]
+    try:
+        done = P.move(str(mine), mine.name, cell)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except OSError as exc:
+        return failed(f"The map could not be placed: {exc}", 500, exc)
+    out = P.layout(str(mine), mine.name)
+    out["moved"] = done
+    out["beside"] = theirs.name
+    return jsonify(out)
+
+
 @app.route("/api/zones")
 def api_zone_settings():
     """What a zone may say about itself, and the wall styles it may pin to.

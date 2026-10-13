@@ -82,6 +82,11 @@ class Plan:
     # the real footprint lies. Tiles outside it stay room 0, which is
     # how BuildingEd knows they are not part of the building.
     mask: list[list[bool]] | None = None
+    # True when these rooms were drawn by hand rather than laid out here. A
+    # plan cut out of a slanted footprint is full of wedges that are not
+    # rooms; a plan somebody drew has none, and the pieces that look like one
+    # are rooms they meant (knoxbuild/designer.py).
+    drawn: bool = False
     # Squares deliberately left open to the storey below: the hole in an
     # upper floor of a mall, so the concourse is one space several storeys
     # tall and you can see the ground floor from the gallery. They belong to
@@ -2256,6 +2261,13 @@ def _mend_fragments(plan: Plan) -> None:
     def too_small(cells) -> bool:
         if len(cells) < 4:
             return True
+        if plan.drawn:
+            # Hand-drawn: a strip two tiles thick is a corridor if that is
+            # what it was drawn as. Folding those into the room next door ate
+            # rooms people had just drawn - draw a room, draw another over
+            # part of it, and what was left of the first became part of the
+            # second, under a name they never picked.
+            return False
         xs = {x for x, _ in cells}
         ys = {y for _, y in cells}
         # A whole rectangle of 3x3 or more is a real room - a small bathroom

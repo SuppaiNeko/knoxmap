@@ -1059,7 +1059,8 @@ def _points_of_use(out_dir: str, info: dict, map_name: str, proj) -> dict:
     cache = os.path.join(out_dir, info["osm_cache"]) if info.get("osm_cache")         else osm.cache_path(out_dir, map_name)
     wanted = tuple(info["osm_bbox"]) if info.get("osm_bbox") else         (bbox.get("south"), bbox.get("west"), bbox.get("north"), bbox.get("east"))
     grid: dict = {}
-    feats = osm.load_cache(cache, wanted) or []
+    # As the paper map does: this reads the download, it never fetches one.
+    feats = osm.load_cache(cache, wanted, filters=None) or []
     # Points drawn by hand count too. They are kept beside the map rather than
     # in the download (app.py, _save_sketch), so reading only the cache left a
     # petrol station somebody placed themselves with no forecourt and no

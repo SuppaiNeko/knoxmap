@@ -382,6 +382,98 @@ class TheStaircaseInADrawnBuilding(unittest.TestCase):
                          [(1, 1, 6, 6, "livingroom")])
 
 
+class RoomsDrawnAreRoomsKept(unittest.TestCase):
+    """The layout folds anything thin or ragged into the room beside it,
+    because the plans it cuts out of a slanted footprint are full of wedges
+    that are not rooms. Over a drawing there are no wedges, only what somebody
+    drew: a room drawn across part of another left the rest of that one as a
+    strip, and the strip was quietly given to the new room under a name
+    nobody picked."""
+
+    def built(self, *drawn, sheet=(24, 20)):
+        design = D.clean({"width": sheet[0], "height": sheet[1], "storeys": 1,
+                          "rooms": list(drawn)})
+        return design, D.stack(design)
+
+    def kinds_of(self, built):
+        return {r.kind for r in built.storeys[0].rooms if not r.is_core}
+
+    def test_what_is_left_of_a_room_drawn_over_keeps_its_own_name(self):
+        # A dining room, then a laundry across the middle of it: what is left
+        # of the dining room is two strips two tiles thick, and both used to
+        # come back as laundry.
+        design, built = self.built(room(2, 2, 10, 9, "dining"),
+                                   room(4, 2, 6, 9, "laundry"))
+        self.assertIn("dining", self.kinds_of(built))
+        self.assertIn("laundry", self.kinds_of(built))
+
+    def test_a_corridor_two_tiles_thick_is_a_corridor(self):
+        design, built = self.built(room(2, 2, 10, 8, "livingroom"),
+                                   room(2, 10, 10, 2, "hall"))
+        self.assertIn("hall", self.kinds_of(built))
+
+    def test_a_hallway_stays_a_hallway_and_can_be_walked_down(self):
+        # The one that is felt rather than seen: a hall folded into the living
+        # room beside it is furnished as a living room, so a sofa and a
+        # bookshelf end up standing in the hallway and the rooms beyond it are
+        # behind them.
+        from collections import deque
+
+        from knoxbuild import layout as L
+
+        design, built = self.built(room(0, 0, 12, 4, "livingroom"),
+                                   room(0, 4, 10, 2, "hall"),
+                                   room(0, 6, 6, 5, "bedroom"),
+                                   room(6, 6, 6, 5, "kitchen"),
+                                   sheet=(12, 11))
+        storey = built.storeys[0]
+        halls = [i for i, r in enumerate(storey.rooms, 1) if r.kind == "hall"]
+        self.assertTrue(halls, "the hallway was swallowed by the room beside it")
+        blocked = set()
+        for role, fx, fy, orient in storey.furniture:
+            if L._blocks(role):
+                blocked.update(L._tiles_under(role, fx, fy, orient))
+        free = [(x, y) for y in range(storey.height) for x in range(storey.width)
+                if storey.grid[y][x] == halls[0] and (x, y) not in blocked]
+        self.assertTrue(free, "every tile of the hallway has something on it")
+        seen, queue = {free[0]}, deque(free[:1])
+        while queue:
+            x, y = queue.popleft()
+            for step in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if step in free and step not in seen:
+                    seen.add(step)
+                    queue.append(step)
+        self.assertEqual(len(seen), len(free), "the hallway is blocked across")
+
+    def test_a_crumb_of_three_tiles_is_still_not_a_room(self):
+        # Nothing can stand in it and the game would have a room with no way
+        # in; it goes to the room it borders, as it always did.
+        design, built = self.built(room(2, 2, 10, 8, "livingroom"),
+                                   room(2, 10, 3, 1, "closet"))
+        self.assertNotIn("closet", self.kinds_of(built))
+
+    def test_nothing_drawn_is_lost_however_the_drawing_is_built_up(self):
+        import random
+
+        kinds = ["livingroom", "kitchen", "bedroom", "bathroom", "hall",
+                 "dining", "office", "storage"]
+        rng = random.Random(11)
+        for trial in range(12):
+            design = D.clean({"width": 30, "height": 24, "storeys": 1, "rooms": []})
+            for step in range(10):
+                design["rooms"].append(room(rng.randrange(20), rng.randrange(16),
+                                            rng.randint(4, 9), rng.randint(4, 9),
+                                            kinds[step % len(kinds)]))
+                design = D.clean(design)
+                built = D.stack(design)
+                made = self.kinds_of(built)
+                for r in design["rooms"]:
+                    # Every piece big enough to be a room is still that room.
+                    if r["w"] * r["h"] >= 4 and min(r["w"], r["h"]) >= 2:
+                        self.assertIn(r["kind"], made,
+                                      f"trial {trial} step {step}: {r} went missing")
+
+
 class TheRoomsOnOffer(unittest.TestCase):
     def test_no_two_rooms_are_offered_under_the_same_name(self):
         # The editor lists what it can draw by name; two rooms with one name

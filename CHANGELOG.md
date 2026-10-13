@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.7.4
+
+- **The drawing board joins the map next door** (`knoxbuild/joins.py`, new;
+  `app.py`, `static/js/app.js`, `templates/index.html`,
+  `static/css/app.css`). A sheet had no world under it, which is the point of
+  it and also meant a street drawn on one stopped dead at the edge and a town
+  drawn to carry on from another never lined up with it.
+
+  Pick a map you have already built and say which side of it this sheet is
+  on. That map is drawn beside the sheet at its real size, and the streets
+  that reach the border they share are marked on the sheet's own edge - read
+  off the road picture the renderer drew, so they are where they really are.
+  Draw a road to one and it snaps onto it. When the map is built it is put
+  beside its neighbour in the world rather than wherever there was room, so
+  the two streets meet in the game.
+
+  **The sheet says what it is in cells.** The game stores a map in cells of
+  300 tiles and nothing finer, so a sheet that is not whole cells is built
+  with empty ground round it - the drawing centred in what the cells leave -
+  and its streets stop short of the edge. The sheet now says how many cells
+  it is, says when it will be padded, and has a button that rounds it to
+  whole ones. Nothing about a hand-drawn map lines up with anything until
+  this is right.
+
+  **And the things it was missing.** Move and reshape: drag the corners of
+  what is drawn instead of drawing it again. Duplicate, for a row of houses.
+  What a thing measures - how long a road is, how big a field is - beside its
+  name when it is picked. Delete removes what is picked and Escape stops
+  drawing. New points snap to the corners of what is already there, so two
+  streets that should meet do.
+
+- **Four more from #bug-reports** (`generator/osm.py`, `knoxbuild/worldmap.py`,
+  `knoxbuild/build.py`, `knoxbuild/layout.py`, `knoxbuild/designer.py`,
+  `knoxbuild/buildtiles.py`, `knoxbuild/catalog.py`, `tools/make_catalog.py`,
+  `tools/selftest.py`).
+
+  **A map built again kept its buildings and lost its roads.** The download
+  kept beside a map is stamped with the filter list it was fetched with, and
+  asking for gate nodes in 1.7.3 moved that list on. Fetching is right to turn
+  an older file away - the new filters are there to bring back things the old
+  ones never asked for - but the steps that only read it are not: the paper
+  map, the spawn selector's map and the shops and surgeries mapped as points
+  all come out of that one file. So a map drawn before the change and built
+  after it had buildings on its map and not one road, river or wood. Those
+  steps now take whatever download is there, and the build says so when there
+  is none rather than quietly writing a map with nothing on it.
+
+  **Windows a house can open.** Project Zomboid marks most of each window
+  sheet as never opening - in the wooden one only two of its sixteen shapes
+  open - and five of the fourteen house styles were built with those, as were
+  the school, the surgery and the town hall. About a third of a town's houses
+  had windows that could only be smashed and never shut again. Every one of
+  them is now a window that opens; the shop fronts and the factory glazing
+  keep theirs, which are fixed panes in the game too. The selftest checks the
+  list against the player's own copy of the game.
+
+  **A room drawn by hand is a room.** The layout folds anything thin or
+  ragged into the room beside it, because a plan cut out of a slanted
+  footprint is full of wedges that are not rooms. A drawing has no wedges,
+  only what somebody drew: draw a room across part of another and the rest of
+  the first was given away to the second under a name nobody picked, and a
+  hallway ten tiles by two was swallowed by the living room next to it - then
+  furnished as a living room, which is how a sofa and a bookshelf came to be
+  standing in a hallway with the rest of the house behind them. Over a
+  drawing, only a crumb of three tiles or less is still folded away.
+
 ## 1.7.3
 
 - **Put your map where you want it on the world map** (`knoxbuild/placement.py`,

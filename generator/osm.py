@@ -815,9 +815,18 @@ def save_cache(path: str, bbox: tuple[float, float, float, float],
         raise
 
 
-def load_cache(path: str,
-               bbox: tuple[float, float, float, float]) -> list[OSMFeature] | None:
-    """Cached features for exactly this bbox, or None."""
+def load_cache(path: str, bbox: tuple[float, float, float, float],
+               filters: int | None = FILTERS_VERSION) -> list[OSMFeature] | None:
+    """Cached features for exactly this bbox, or None.
+
+    `filters` is the filter list the caller insists on: the current one by
+    default, so a download made before the list grew is fetched again rather
+    than quietly lacking what was added to it. Pass None to take whatever is
+    there, which is what the steps after the map was drawn want - the build
+    and the paper map read this download, they never fetch one, and refusing
+    an older file there does not get the new tags, it loses every road, river
+    and wood the map already has.
+    """
     if not os.path.exists(path):
         return None
     # A cache is only ever a shortcut: whatever is wrong with the file - cut
@@ -827,7 +836,7 @@ def load_cache(path: str,
     try:
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             payload = json.load(fh)
-        if payload.get("filters") != FILTERS_VERSION:
+        if filters is not None and payload.get("filters") != filters:
             return None
         cached = payload.get("bbox") or []
         if len(cached) != 4 or any(abs(a - b) > 1e-9 for a, b in zip(cached, bbox)):

@@ -79,6 +79,32 @@ def parse_tbx(text: str) -> Building:
     return Building(w, h, dict(root.attrib), entries, rooms, floors, furniture)
 
 
+# Windows the game will never let anybody open. It marks them WindowLocked in
+# its own tile definitions (media/newtiledefinitions.tiles) and most of each
+# sheet is: in the wooden one only two of its sixteen shapes open, so a third
+# of the house styles were built with windows that could only ever be smashed
+# and never shut again. Read off the game's definitions, by sheet and the
+# sprite numbers inside it; tools/selftest.py checks this against the player's
+# own copy of the game, where there is one.
+LOCKED_WINDOWS = {
+    # The two shop-front panes: fixed glass, which is what a shop front is.
+    "fixtures_windows_01": ((40, 43), (48, 51), (72, 73)),
+    "fixtures_windows_white": ((0, 15), (24, 31)),
+    "fixtures_windows_wood": ((0, 15), (20, 31)),
+    "fixtures_windows_metal": ((0, 15), (20, 31)),
+}
+
+
+def window_locked(tile: str) -> bool:
+    """Whether this window sprite is one the game keeps shut for good."""
+    m = re.match(r"^(fixtures_windows_[a-z0-9_]*?)_(\d+)$", tile or "")
+    if not m:
+        return False
+    number = int(m.group(2))
+    return any(low <= number <= high
+               for low, high in LOCKED_WINDOWS.get(m.group(1), ()))
+
+
 _WINDOW_FAMILIES = ("white", "metal", "wood", "church")
 _SPECIAL_WINDOWS = {40: 17, 42: 17, 48: 17, 50: 17, 41: 18, 43: 18, 49: 18, 51: 18}
 

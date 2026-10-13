@@ -2520,6 +2520,57 @@ def check_osm_parse_tolerant(check) -> None:
           "and what is there is kept: the good points of a way, and the elements around it")
 
 
+def check_windows_open(check) -> None:
+    """The windows on a house are ones the game lets you open.
+
+    The table of locked window sprites is read off the game's own tile
+    definitions, so it can go stale when the game changes. Where this PC has
+    the game, the table is checked against it; where it has not, only the
+    styles are checked, which is what CI can see.
+    """
+    import re as _re
+
+    from knoxbuild import catalog as _C
+    from knoxbuild.buildtiles import LOCKED_WINDOWS, window_locked
+
+    def west(style):
+        return (style.get("window") or {}).get("tiles", {}).get("West", "")
+
+    shut = [s["name"] for s in _C.HOUSE_STYLES if window_locked(west(s))]
+    check(not shut, f"every house style has windows that open ({shut or 'all 14'})")
+    public = [k for k in ("civic", "medical", "school")
+              if window_locked(west(_C.SPECIAL_STYLES[k]))]
+    check(not public, f"so does every building people walk into ({public or 'all of them'})")
+
+    import knoxpaths
+    media = knoxpaths.pz_media_dir()
+    path = os.path.join(str(media), "newtiledefinitions.tiles.txt") if media else ""
+    if not path or not os.path.exists(path):
+        print("  --    the game's own tile definitions are not on this PC, "
+              "so the locked-window table is taken as read")
+        return
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    locked = {}
+    for block in _re.findall(r"tileset\s*\{(.*?)\n\}", text, _re.S):
+        sheet = _re.search(r"file = (\S+)", block)
+        if not sheet or sheet.group(1) not in LOCKED_WINDOWS:
+            continue
+        for tile in _re.finditer(r"//\s*(\S+)\n\s*tile\s*\{(.*?)\n    \}",
+                                 block, _re.S):
+            if "WindowLocked" in tile.group(2):
+                locked.setdefault(sheet.group(1), set()).add(
+                    int(tile.group(1).rsplit("_", 1)[1]))
+    wrong = []
+    for sheet, spans in LOCKED_WINDOWS.items():
+        ours = {n for low, high in spans for n in range(low, high + 1)}
+        theirs = locked.get(sheet, set())
+        if ours != theirs:
+            wrong.append(f"{sheet}: {sorted(ours ^ theirs)[:8]}")
+    check(not wrong, f"the locked-window table matches this copy of the game "
+                     f"({'; '.join(wrong) if wrong else 'all four sheets'})")
+
+
 def check_osm_cache(check, work: str) -> None:
     """A cached download that is damaged is a miss, and a save cannot leave half a file."""
     import gzip
@@ -4008,6 +4059,7 @@ def main(argv: list[str]) -> int:
         check_throttle(check)
         check_osm_parse_tolerant(check)
         check_osm_cache(check, work)
+        check_windows_open(check)
         check_config_file(check, work)
         check_install_clears(check, work)
         check_odd_tags(check)

@@ -614,13 +614,20 @@ def main(argv: list[str]) -> int:
     # from HOUSE_STYLES (picked per neighbourhood block, so a street stays
     # coherent while the next one differs), and anything OSM tags as a school,
     # church, shop, diner or works gets its own materials from SPECIAL_STYLES.
+    # Windows the game never lets anybody open are no use on a building
+    # people go into: it has to be smashed to get in and it can never be shut
+    # again. The game marks them WindowLocked in its own tile definitions
+    # (media/newtiledefinitions.tiles) and most of each window sheet is
+    # locked - in the wooden one only two of its sixteen shapes open. Every
+    # window below is one of the ones that do; the shop fronts and the
+    # factory glazing keep theirs, which are meant to be fixed panes.
     HOUSE_STYLE_SPEC = [
         ("clapboard", "walls_exterior_house_01_032", "walls_interior_house_01_016", "fixtures_windows_01_008", "fixtures_windows_curtains_01_032"),
-        ("brick", "walls_exterior_house_01_016", "walls_interior_house_02_000", "fixtures_windows_wood_008", "fixtures_windows_curtains_01_040"),
-        ("painted", "walls_exterior_house_01_052", "walls_interior_house_03_000", "fixtures_windows_white_024", "fixtures_windows_curtains_02_008"),
+        ("brick", "walls_exterior_house_01_016", "walls_interior_house_02_000", "fixtures_windows_wood_018", "fixtures_windows_curtains_01_040"),
+        ("painted", "walls_exterior_house_01_052", "walls_interior_house_03_000", "fixtures_windows_white_022", "fixtures_windows_curtains_02_008"),
         ("stucco", "walls_exterior_house_02_004", "walls_interior_house_02_032", "fixtures_windows_01_024", "fixtures_windows_curtains_02_000"),
         ("panel", "walls_exterior_house_02_016", "walls_interior_house_03_020", "fixtures_windows_01_032", "fixtures_windows_curtains_02_000"),
-        ("timber", "walls_exterior_wooden_01_024", "walls_interior_house_01_052", "fixtures_windows_wood_024", "fixtures_windows_curtains_01_040"),
+        ("timber", "walls_exterior_wooden_01_024", "walls_interior_house_01_052", "fixtures_windows_wood_016", "fixtures_windows_curtains_01_040"),
         ("logs", "walls_logs_000", "walls_interior_house_03_032", "fixtures_windows_wood_016", "fixtures_windows_curtains_01_040"),
         ("trailer", "location_trailer_01_000", "location_trailer_01_024", "fixtures_windows_01_000", "fixtures_windows_curtains_02_008"),
         # BuildingTemplates.txt offers 24 exterior wall families and the first
@@ -630,9 +637,9 @@ def main(argv: list[str]) -> int:
         # Painted clapboard in the colours Knox County's own houses wear. The
         # old "plaster" style was an interior wall used outside; the editor has
         # no gable ends for it, so its roofs ended in white triangles.
-        ("siding_blue", "walls_exterior_house_02_020", "walls_interior_house_02_000", "fixtures_windows_white_024", "fixtures_windows_curtains_02_000"),
+        ("siding_blue", "walls_exterior_house_02_020", "walls_interior_house_02_000", "fixtures_windows_white_022", "fixtures_windows_curtains_02_000"),
         ("siding_yellow", "walls_exterior_house_02_032", "walls_interior_house_03_000", "fixtures_windows_white_016", "fixtures_windows_curtains_01_032"),
-        ("siding_green", "walls_exterior_house_02_080", "walls_interior_house_01_016", "fixtures_windows_white_024", "fixtures_windows_curtains_01_040"),
+        ("siding_green", "walls_exterior_house_02_080", "walls_interior_house_01_016", "fixtures_windows_white_022", "fixtures_windows_curtains_01_040"),
         ("siding_pink", "walls_exterior_house_02_068", "walls_interior_house_03_036", "fixtures_windows_white_016", "fixtures_windows_curtains_02_000"),
         ("siding_grey", "walls_exterior_house_01_000", "walls_interior_house_02_032", "fixtures_windows_01_008", "fixtures_windows_curtains_02_008"),
     ]
@@ -734,7 +741,7 @@ def main(argv: list[str]) -> int:
     # 150-160, floor-to-ceiling 216-225.
     SPECIAL_WINDOWS = {
         # Tall three-pane classroom windows.
-        "school": [(1, "fixtures_windows_metal_020", None)],
+        "school": [(1, "fixtures_windows_metal_016", None)],
         # Stained glass.
         "church": [(1, "fixtures_windows_church_014", None)],
         "restaurant": [(1, "fixtures_windows_01_048", "fixtures_windows_curtains_01_040")],
@@ -742,11 +749,11 @@ def main(argv: list[str]) -> int:
         # Wide, low windows high on a works wall.
         "industrial": [(1, "fixtures_windows_metal_026", None)],
         "barn": [(1, "fixtures_windows_wood_024", None)],
-        "medical": [(1, "fixtures_windows_white_010", "fixtures_windows_curtains_02_000"),
+        "medical": [(1, "fixtures_windows_white_020", "fixtures_windows_curtains_02_000"),
                     (5, "fixtures_windows_metal_010", "fixtures_windows_curtains_02_000")],
         # Offices, hotels, town halls: tall panes, then glass from the height
         # layout.GLASS_TOWER_FROM_LEVELS glazes every tile.
-        "civic": [(1, "fixtures_windows_white_010", "fixtures_windows_curtains_02_000"),
+        "civic": [(1, "fixtures_windows_white_020", "fixtures_windows_curtains_02_000"),
                   (5, "fixtures_windows_metal_010", "fixtures_windows_curtains_02_000"),
                   (8, "fixtures_windows_metal_014", None)],
         # Low flats: tall sash. Mid-rise: tall double panes. Towers: panels
