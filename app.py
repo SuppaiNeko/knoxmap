@@ -32,7 +32,7 @@ from generator import renderer, sketch
 from knoxbuild import mapstate
 from knoxbuild.settings import Settings
 
-from web import common, geo, jobs, presets, system, updates
+from web import common, geo, jobs, presets, system, updates, zones
 from web.checks import (BASE_BYTES, BUILD_BASE_BYTES, BUILD_BYTES_PER_TILE,
                         BYTES_PER_TILE, OVERPASS_TILE_KM2,
                         USUAL_METERS_PER_TILE, _normalise_bbox, _shape_rings)
@@ -41,9 +41,9 @@ from web.common import (SAFE_NAME, _bbox_area_km2, _cos_lat, _json_body,
 from web.geo import CACHE_DIR
 from web.jobs import (_COMPILE, _PROGRESS_LOCK, _done_stopping, _set_progress,
                       _stopped, _stopper)
-from web.mapfiles import (_load_design, _load_edits, _load_settings,
-                          _load_sketch, _osm_cache_for, _save_design,
-                          _save_edits, _save_settings, _save_sketch)
+from web.mapfiles import (_load_edits, _load_settings, _load_sketch,
+                          _map_summary, _osm_cache_for, _save_design,
+                          _save_settings, _save_sketch)
 # </imports>
 
 
@@ -429,52 +429,6 @@ def generate():
     })
 
 
-def _map_summary(map_dir: Path) -> dict:
-    """What the window shows for a map it did not just make."""
-    info = {}
-    try:
-        with open(map_dir / f"{map_dir.name}_info.json", encoding="utf-8") as f:
-            info = json.load(f)
-    except (OSError, ValueError):
-        pass
-    needs = mapstate.needs(str(map_dir))
-    stages = mapstate.done(str(map_dir))
-    return {
-        "mapName": map_dir.name,
-        "width": info.get("width_tiles", 0),
-        "height": info.get("height_tiles", 0),
-        "cellsX": info.get("cells_x", 0),
-        "cellsY": info.get("cells_y", 0),
-        "featureCount": info.get("feature_count") or info.get("building_count", 0),
-        "rotation": round(info.get("rotation", 0.0), 1),
-        "updated": int(map_dir.stat().st_mtime),
-        # What it was made from, so the window can run the steps again
-        # over the same area without asking for it to be drawn afresh.
-        "bbox": info.get("bbox"),
-        "metersPerTile": info.get("meters_per_tile", 1.0),
-        "shape": info.get("shape"),
-        # The settings this map was made with. Upgrading it sent none at all,
-        # so a map drawn with Knox County roads or a tree density of its own
-        # came back with the defaults and looked like a different town.
-        "settings": _load_settings(map_dir).to_dict(),
-        "madeWith": mapstate.made_with(str(map_dir)),
-        "current": knoxlog.version(),
-        "stages": {k: v.get("version") for k, v in stages.items()},
-        "needs": needs,
-        "needsLabels": [mapstate.LABELS[s] for s in needs],
-        "files": {
-            "landscape": f"/output/{map_dir.name}/{map_dir.name}.bmp",
-            "vegetation": f"/output/{map_dir.name}/{map_dir.name}_veg.bmp",
-            "spawn": f"/output/{map_dir.name}/{map_dir.name}_ZombieSpawnMap.bmp",
-            "preview": f"/output/{map_dir.name}/{map_dir.name}_preview.png",
-            "buildings": f"/output/{map_dir.name}/{map_dir.name}_buildings.geojson",
-            "meta": f"/output/{map_dir.name}/{map_dir.name}_info.json",
-            "zip": f"/download/{map_dir.name}.zip",
-            "readme": f"/output/{map_dir.name}/README.txt",
-        },
-    }
-
-
 @app.route("/api/maps")
 def api_maps():
     """Every map in output/, newest first, and whether an older KnoxMap made
@@ -694,234 +648,6 @@ def api_worlded():
         return jsonify({"error": "No .pzw yet — generate the buildings first."}), 400
     subprocess.Popen(knoxpaths.command_for(exe) + [str(pzw)])
     return jsonify({"launched": str(pzw)})
-
-
-# How many features one look at the map may bring back. A city has a hundred
-# thousand; a page that is handed them all stops responding, and nobody edits
-# a hundred thousand things by hand anyway. The biggest are sent first, so
-# what arrives is what is worth editing.
-EDIT_FEATURE_LIMIT = 1200
-
-
-@app.route("/api/features/<name>")
-def api_features(name: str):
-    """This map's own features, as GeoJSON, for editing.
-
-    They come from the download that made the map, not from a fresh one, so
-    what is edited is exactly what was built - and editing costs no requests
-    to Overpass at all.
-    """
-    map_dir = _map_dir(name)
-    if map_dir is None:
-        return jsonify({"error": "Bad map name."}), 400
-    info = _map_summary(map_dir)
-    box = info.get("bbox") or {}
-    if not box:
-        return jsonify({"error": "That map has no area recorded, so there is "
-                                 "nothing to read its features from."}), 400
-    settings = _load_settings(map_dir)
-    cache, fetch_box = _osm_cache_for(
-        map_dir, (box["south"], box["west"], box["north"], box["east"]),
-        float(info.get("metersPerTile") or 1.0), settings)
-    features = osm.load_cache(cache, fetch_box)
-    if features is None:
-        return jsonify({"error": "This map's download is not beside it any "
-                                 "more, or it was made by a version whose "
-                                 "filters have changed. Generate it again and "
-                                 "its features can be edited."}), 404
-    # Only what is being looked at, which is what keeps a town editable.
-    view = None
-    try:
-        view = (float(request.args["south"]), float(request.args["west"]),
-                float(request.args["north"]), float(request.args["east"]))
-    except (KeyError, TypeError, ValueError):
-        view = None
-    out = mapedits.as_geojson(features, view, EDIT_FEATURE_LIMIT)
-    out["edits"] = _load_edits(map_dir)
-    return jsonify(out)
-
-
-@app.route("/api/edits/<name>", methods=["GET", "POST"])
-def api_edits(name: str):
-    map_dir = _map_dir(name)
-    if map_dir is None:
-        return jsonify({"error": "Bad map name."}), 400
-    if request.method == "GET":
-        return jsonify(_load_edits(map_dir))
-    changes = mapedits.clean(_json_body())
-    _save_edits(map_dir, changes)
-    return jsonify({"changes": mapedits.count(changes), **changes})
-
-
-@app.route("/api/sketch")
-def api_sketch_palette():
-    """What can be drawn, and the OpenStreetMap tags each one carries.
-
-    The page builds its palette from this rather than holding a second copy of
-    the tags: a tag that is wrong here draws a shape that is missing from the
-    finished map, and one list cannot disagree with itself."""
-    return jsonify({"palette": sketch.palette(),
-                    "categories": {e["id"]: sketch.category_of(e["id"])
-                                   for e in sketch.palette()}})
-
-
-@app.route("/api/design/<name>", methods=["GET", "POST"])
-def api_design(name: str):
-    """The editor's own sheet: what was drawn, in metres, and how big it is.
-
-    Kept as drawn rather than as the GeoJSON it becomes, because metres from
-    a corner are what the editor works in and degrees are not - a sheet that
-    came back as longitude could not be drawn on again without guessing at
-    the conversion backwards.
-    """
-    map_dir = _map_dir(name)
-    if map_dir is None:
-        return jsonify({"error": "Bad map name."}), 400
-    if request.method == "GET":
-        design = _load_design(map_dir)
-        if design is None:
-            return jsonify({"error": "That map was not drawn on a sheet."}), 404
-        return jsonify(design)
-    design = _json_body()
-    if not isinstance(design, dict):
-        return jsonify({"error": "Expected a sheet."}), 400
-    _save_design(map_dir, design)
-    south, west, north, east = sketch.design_bbox(design)
-    made = sketch.features(sketch.design_to_drawn(design))
-    return jsonify({"saved": len(design.get("features") or []),
-                    "usable": len(made),
-                    "bbox": {"south": south, "west": west,
-                             "north": north, "east": east}})
-
-
-# ---- drawing a map that joins one already built ----------------------------
-#
-# The drawing board has no world under it, which is the point of it and also
-# means a street drawn on it stops dead at the edge. These two give it the map
-# next door: where that map's roads leave the side they share, so the drawing
-# can be made to meet them, and the ground it stands on afterwards, so the two
-# really are neighbours in the game.
-
-@app.route("/api/board/join/<name>")
-def api_board_join(name: str):
-    """A built map, as the drawing board needs to see it.
-
-    `side` is where the new sheet goes - "E" means east of this map - and
-    `w`/`h` are the sheet in metres, so the roads come back as points on it.
-    """
-    from knoxbuild import joins
-    from knoxbuild import placement as P
-
-    map_dir = _map_dir(name)
-    if map_dir is None:
-        return jsonify({"error": "Bad map name."}), 400
-    side = (request.args.get("side") or "E").upper()
-    try:
-        sheet_w = float(request.args.get("w") or 900)
-        sheet_h = float(request.args.get("h") or 900)
-        out = joins.sheet_joins(str(map_dir), map_dir.name, side, sheet_w, sheet_h)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    where = P.saved(str(map_dir)) or P.project_origin(str(map_dir), map_dir.name)
-    cells_w, cells_h = P.project_size(str(map_dir), map_dir.name)
-    out["cells"] = ({"x": where[0], "y": where[1], "w": cells_w, "h": cells_h}
-                    if where else None)
-    out["cellTiles"] = P.CELL_SIZE
-    preview = map_dir / f"{map_dir.name}_preview.png"
-    out["preview"] = (f"/output/{map_dir.name}/{preview.name}"
-                      if preview.exists() else None)
-    return jsonify(out)
-
-
-@app.route("/api/board/place-beside", methods=["POST"])
-def api_board_place_beside():
-    """Put a map that has just been built next to the one it was drawn to
-    join, so the street that meets its border meets it in the game too."""
-    from knoxbuild import joins
-    from knoxbuild import placement as P
-
-    body = _json_body()
-    mine = _map_dir(str(body.get("map") or ""))
-    theirs = _map_dir(str(body.get("neighbour") or ""))
-    side = str(body.get("side") or "E").upper()
-    if mine is None or theirs is None:
-        return jsonify({"error": "Bad map name."}), 400
-    if side not in joins.SIDES:
-        return jsonify({"error": f"A map has four sides, not {side}."}), 400
-    where = P.saved(str(theirs)) or P.project_origin(str(theirs), theirs.name)
-    if not where:
-        return jsonify({"error": f"{theirs.name} has no place in the world "
-                                 f"yet, so there is nothing to sit beside."}), 400
-    their_w, their_h = P.project_size(str(theirs), theirs.name)
-    my_w, my_h = P.project_size(str(mine), mine.name)
-    # Corners line up on the side they share, which is what makes the streets
-    # across the border line up too.
-    cell = {"E": (where[0] + their_w, where[1]),
-            "W": (where[0] - my_w, where[1]),
-            "S": (where[0], where[1] + their_h),
-            "N": (where[0], where[1] - my_h)}[side]
-    try:
-        done = P.move(str(mine), mine.name, cell)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except OSError as exc:
-        return failed(f"The map could not be placed: {exc}", 500, exc)
-    out = P.layout(str(mine), mine.name)
-    out["moved"] = done
-    out["beside"] = theirs.name
-    return jsonify(out)
-
-
-@app.route("/api/zones")
-def api_zone_settings():
-    """What a zone may say about itself, and the wall styles it may pin to.
-
-    Served rather than written into the page, for the same reason the settings
-    are: a second copy drifts, and a zone setting the window offers that the
-    generator does not read is a dial that does nothing.
-    """
-    from knoxbuild import zones as Z
-    from knoxbuild.build import style_names
-
-    return jsonify({"settings": Z.overridable(), "styles": style_names(),
-                    "styleKey": Z.STYLE_KEY})
-
-
-@app.route("/api/zones/<name>", methods=["GET", "POST"])
-def api_zones(name: str):
-    from knoxbuild import zones as Z
-
-    map_dir = _map_dir(name)
-    if map_dir is None:
-        return jsonify({"error": "Bad map name."}), 400
-    if request.method == "GET":
-        return jsonify({"zones": Z.load(str(map_dir), map_dir.name)})
-    body = _json_body()
-    drawn = body.get("zones") if isinstance(body, dict) else body
-    if not isinstance(drawn, list):
-        return jsonify({"error": "Expected a list of zones."}), 400
-    try:
-        Z.save(str(map_dir), map_dir.name, drawn)
-    except OSError as exc:
-        return failed(f"The zones could not be saved: {exc}", 500, exc)
-    kept = Z.load(str(map_dir), map_dir.name)
-    return jsonify({"zones": kept, "saved": len(kept)})
-
-
-@app.route("/api/sketch/<name>", methods=["GET", "POST"])
-def api_sketch(name: str):
-    map_dir = _map_dir(name)
-    if map_dir is None:
-        return jsonify({"error": "Bad map name."}), 400
-    if request.method == "GET":
-        return jsonify(_load_sketch(map_dir))
-    drawn = _json_body()
-    if not isinstance(drawn, dict):
-        return jsonify({"error": "Expected a GeoJSON FeatureCollection."}), 400
-    _save_sketch(map_dir, drawn)
-    made = sketch.features(drawn)
-    return jsonify({"saved": len(drawn.get("features") or []),
-                    "usable": len(made)})
 
 
 def _expected_cells(map_dir: Path) -> int:
@@ -1314,6 +1040,7 @@ app.register_blueprint(updates.bp)
 app.register_blueprint(geo.bp)
 app.register_blueprint(system.bp)
 app.register_blueprint(presets.bp)
+app.register_blueprint(zones.bp)
 
 
 if __name__ == "__main__":

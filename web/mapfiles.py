@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 
+import knoxlog
 from generator import edits as mapedits
 from generator import osm, renderer
+from knoxbuild import mapstate
 from knoxbuild.settings import Settings
 # </imports>
 
@@ -142,3 +144,49 @@ def _save_design(map_dir: Path, design: dict) -> None:
         os.replace(tmp, path)
     except OSError:
         pass          # a map whose sheet cannot be saved still renders
+
+
+def _map_summary(map_dir: Path) -> dict:
+    """What the window shows for a map it did not just make."""
+    info = {}
+    try:
+        with open(map_dir / f"{map_dir.name}_info.json", encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        pass
+    needs = mapstate.needs(str(map_dir))
+    stages = mapstate.done(str(map_dir))
+    return {
+        "mapName": map_dir.name,
+        "width": info.get("width_tiles", 0),
+        "height": info.get("height_tiles", 0),
+        "cellsX": info.get("cells_x", 0),
+        "cellsY": info.get("cells_y", 0),
+        "featureCount": info.get("feature_count") or info.get("building_count", 0),
+        "rotation": round(info.get("rotation", 0.0), 1),
+        "updated": int(map_dir.stat().st_mtime),
+        # What it was made from, so the window can run the steps again
+        # over the same area without asking for it to be drawn afresh.
+        "bbox": info.get("bbox"),
+        "metersPerTile": info.get("meters_per_tile", 1.0),
+        "shape": info.get("shape"),
+        # The settings this map was made with. Upgrading it sent none at all,
+        # so a map drawn with Knox County roads or a tree density of its own
+        # came back with the defaults and looked like a different town.
+        "settings": _load_settings(map_dir).to_dict(),
+        "madeWith": mapstate.made_with(str(map_dir)),
+        "current": knoxlog.version(),
+        "stages": {k: v.get("version") for k, v in stages.items()},
+        "needs": needs,
+        "needsLabels": [mapstate.LABELS[s] for s in needs],
+        "files": {
+            "landscape": f"/output/{map_dir.name}/{map_dir.name}.bmp",
+            "vegetation": f"/output/{map_dir.name}/{map_dir.name}_veg.bmp",
+            "spawn": f"/output/{map_dir.name}/{map_dir.name}_ZombieSpawnMap.bmp",
+            "preview": f"/output/{map_dir.name}/{map_dir.name}_preview.png",
+            "buildings": f"/output/{map_dir.name}/{map_dir.name}_buildings.geojson",
+            "meta": f"/output/{map_dir.name}/{map_dir.name}_info.json",
+            "zip": f"/download/{map_dir.name}.zip",
+            "readme": f"/output/{map_dir.name}/README.txt",
+        },
+    }
