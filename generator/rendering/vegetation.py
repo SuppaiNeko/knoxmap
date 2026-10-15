@@ -1,6 +1,5 @@
 """The vegetation pass: woodland, hedges and orchards, gardens, wild growth, and clearing
 trees off buildings and roads."""
-# <imports>
 from __future__ import annotations
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -9,7 +8,6 @@ from .. import pz_colors as C
 from ..osm import OSMFeature, classify
 from .geometry import _feature_coords_px, _is_polygon
 from .projection import Projector
-# </imports>
 
 
 def _paint_vegetation(veg: Image.Image, landscape: Image.Image,

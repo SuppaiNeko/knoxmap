@@ -1,5 +1,4 @@
 """Cutting a map to a drawn outline: roads that leave it and everything outside it."""
-# <imports>
 from __future__ import annotations
 
 from PIL import Image, ImageDraw
@@ -9,7 +8,6 @@ from ..osm import OSMFeature
 from .geometry import _draw_line, _feature_coords_px, _is_polygon, _pixel_width
 from .projection import Projector
 from .widths import _sidewalk_width_m, _way_width_m
-# </imports>
 
 
 # Roads that carry on past the edge of a drawn shape. Cutting every road at the

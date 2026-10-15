@@ -1,12 +1,10 @@
 """Buildings from the OSM data: the tags that make one, houses invented from address points, and the buildings GeoJSON."""
-# <imports>
 from __future__ import annotations
 
 from ..osm import OSMFeature, classify
 from .geometry import _feature_coords_px, _is_polygon
 from .projection import Projector
 from .widths import _way_width_m
-# </imports>
 
 
 # What survives into the geojson knoxbuild reads. amenity/shop/leisure carry

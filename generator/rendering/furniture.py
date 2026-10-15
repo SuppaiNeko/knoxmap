@@ -1,5 +1,4 @@
 """Street furniture and road wear: lamps, signs, hydrants, drains, cracks and litter."""
-# <imports>
 from __future__ import annotations
 
 import os
@@ -8,7 +7,6 @@ from PIL import Image, ImageFilter
 
 from .. import pz_colors as C
 from ..osm import ROAD_HIERARCHY_BY_CODE
-# </imports>
 
 
 # How often the vanilla streets have each, measured on their squares

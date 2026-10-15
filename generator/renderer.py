@@ -10,7 +10,6 @@ Dimensions are snapped up to the next multiple of 300 (PZ cell size). The
 requested real-world bbox is expanded symmetrically to fit that grid so the
 meters-per-tile scale stays consistent.
 """
-# <imports>
 from __future__ import annotations
 
 import json
@@ -24,10 +23,10 @@ import knoxstop
 
 from . import pz_colors as C
 from . import structures
-from .osm import FENCE_BARRIERS, GATE_BARRIERS, OSMFeature, classify
-# </imports>
+from .osm import (FENCE_BARRIERS, GATE_BARRIERS, OSMFeature,  # noqa: F401
+                  ROAD_HIERARCHY_BY_CODE, ROAD_HIERARCHY_CODES, classify,
+                  road_hierarchy)
 
-# <reexports>
 # Everything that moved out is still importable from here: the tests, the
 # tools and knoxbuild reach into this module by name.
 from .rendering.buildings import (ADDRESS_APART_M, ADDRESS_AVOIDS_ROADS,
@@ -79,7 +78,6 @@ from .rendering.widths import (ROAD_WIDTHS_BY_HIERARCHY_M, ROAD_WIDTHS_M,
                                SIDEWALK_BY_HIERARCHY_M, SIDEWALK_M,
                                VERGE_BY_HIERARCHY_M, VERGE_M, _road_markings,
                                _sidewalk_width_m, _verge_width_m, _way_width_m)  # noqa: F401
-# </reexports>
 
 
 # --- main entry point ------------------------------------------------------

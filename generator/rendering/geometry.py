@@ -1,5 +1,4 @@
 """Small geometry helpers and the pixel drawing primitives the passes share."""
-# <imports>
 from __future__ import annotations
 
 import math
@@ -8,7 +7,6 @@ from PIL import Image, ImageDraw
 
 from ..osm import OSMFeature
 from .projection import Projector
-# </imports>
 
 
 def _pixel_width(metres: float, metres_per_tile: float) -> int:

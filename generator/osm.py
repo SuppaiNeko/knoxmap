@@ -295,7 +295,7 @@ OVERPASS_FILTERS: Sequence[str] = (
     # Homes that were surveyed but never drawn. In whole countries, and in
     # most American suburbs, a house is one node with its number on it and
     # nothing else; those streets came out as roads through empty grass
-    # (generator/renderer.py _houses_from_addresses).
+    # (generator/rendering/buildings.py _houses_from_addresses).
     'node["addr:housenumber"]',
 )
 

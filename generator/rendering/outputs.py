@@ -1,6 +1,5 @@
 """What a render writes besides the two bitmaps: place names, area, line and opening GeoJSON, the
 zombie spawn map and the preview picture."""
-# <imports>
 from __future__ import annotations
 
 import random
@@ -12,7 +11,6 @@ from ..osm import OSMFeature
 from .geometry import _is_polygon
 from .landcover import AREA_CATEGORIES
 from .projection import Projector
-# </imports>
 
 
 def _places(feats: list[OSMFeature], proj: Projector) -> list[dict]:

@@ -1,9 +1,7 @@
 """What each kind of ground is: the draw order, the fill colours and the category sets."""
-# <imports>
 from __future__ import annotations
 
 from .. import pz_colors as C
-# </imports>
 
 
 # --- feature painting ------------------------------------------------------

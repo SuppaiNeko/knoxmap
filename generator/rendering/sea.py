@@ -1,12 +1,10 @@
 """The sea, found from the coastline ways."""
-# <imports>
 from __future__ import annotations
 
 import math
 
 from ..osm import OSMFeature
 from .projection import Projector
-# </imports>
 
 
 def sea_polygons(feats: list[OSMFeature], proj: Projector) -> list:

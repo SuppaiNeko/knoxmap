@@ -1,11 +1,9 @@
 """How wide roads, pavements and verges are drawn, and how a road is marked."""
-# <imports>
 from __future__ import annotations
 
 import math
 
 from ..osm import OSMFeature, road_hierarchy
-# </imports>
 
 
 # Road widths in meters. Converted to pixels by dividing by meters_per_tile.

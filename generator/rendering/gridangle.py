@@ -1,5 +1,4 @@
 """Which way the street grid runs, so a town can be turned square to the map."""
-# <imports>
 from __future__ import annotations
 
 import math
@@ -8,7 +7,6 @@ from typing import Iterable
 from ..osm import OSMFeature, classify
 from .geometry import _is_polygon
 from .projection import Projector
-# </imports>
 
 
 # Roads that count towards a town's street grid. Paths wander, and a motorway

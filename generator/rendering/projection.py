@@ -1,5 +1,4 @@
 """Projection between lat/lon and tiles, the selection drawn on the map, and the bbox the grid covers."""
-# <imports>
 from __future__ import annotations
 
 import math
@@ -9,7 +8,6 @@ import pyproj
 
 from .. import pz_colors as C
 from ..osm import OSMFeature
-# </imports>
 
 
 # --- projection ------------------------------------------------------------

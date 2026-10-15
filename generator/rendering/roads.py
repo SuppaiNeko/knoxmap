@@ -1,6 +1,5 @@
 """The road pass: the road-class image, kerbs and edges, road details, paving under dense
 building and weathering."""
-# <imports>
 from __future__ import annotations
 
 import math
@@ -14,7 +13,6 @@ from .landcover import DENSE_COVERAGE, GREEN_CATEGORIES
 from .projection import Projector
 from .widths import (ROAD_WIDTHS_M, _road_markings, _sidewalk_width_m,
                      _way_width_m)
-# </imports>
 
 
 def _road_hierarchy_image(buckets: dict[str, list[OSMFeature]], proj: Projector) -> Image.Image:
