@@ -4009,14 +4009,15 @@ def main(argv: list[str]) -> int:
             "Map name = Map name\n"            # left in English: not translated
             "a line with no separator\n",
             encoding="utf-8")
-        was_lang = knoxmap_app.LANG_DIR
-        knoxmap_app.LANG_DIR = lang_dir
+        from web import system as websystem
+        was_lang = websystem.LANG_DIR
+        websystem.LANG_DIR = lang_dir
         try:
             listed = client.get("/api/languages").get_json()
             words = client.get("/api/language/testish").get_json()
             missing = client.get("/api/language/klingon")
         finally:
-            knoxmap_app.LANG_DIR = was_lang
+            websystem.LANG_DIR = was_lang
         names = [x["name"] for x in listed["languages"]]
         check(names == ["English", "Testish"]
               and words["strings"] == {"Generate map": "Haritayi olustur", "1. Area": "1. Bolge"}
