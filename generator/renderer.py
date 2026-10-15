@@ -10,6 +10,7 @@ Dimensions are snapped up to the next multiple of 300 (PZ cell size). The
 requested real-world bbox is expanded symmetrically to fit that grid so the
 meters-per-tile scale stays consistent.
 """
+# <imports>
 from __future__ import annotations
 
 import json
@@ -19,119 +20,26 @@ import random
 from dataclasses import dataclass
 from typing import Iterable
 
-import pyproj
 from PIL import Image, ImageDraw, ImageFilter
 
 import knoxstop
 
 from . import pz_colors as C
 from . import structures
-from .osm import (FENCE_BARRIERS, GATE_BARRIERS, OSMFeature, ROAD_HIERARCHY_BY_CODE,
-                  ROAD_HIERARCHY_CODES,
-                  classify, road_hierarchy)
-
-
-# --- projection ------------------------------------------------------------
-
-@dataclass
-class Projector:
-    """Latitude/longitude → pixel coordinate in the output bitmap.
-
-    Uses the UTM zone covering the bbox center so distance in meters maps
-    nearly linearly to pixels. The projected bbox is expanded up to the next
-    300-tile cell multiple.
-    """
-    south: float
-    west: float
-    north: float
-    east: float
-    meters_per_tile: float
-    width: int   # pixels (tile count)
-    height: int  # pixels
-    min_x_m: float
-    min_y_m: float
-    _transformer: pyproj.Transformer
-    # Degrees the map is turned, counter-clockwise, so its main street grid
-    # runs along the tile grid. See dominant_road_angle.
-    rotation: float = 0.0
-
-    @classmethod
-    def build(cls, south: float, west: float, north: float, east: float,
-              meters_per_tile: float, rotation: float = 0.0) -> "Projector":
-        lon_c = (west + east) / 2
-        lat_c = (south + north) / 2
-        utm_zone = int((lon_c + 180) / 6) + 1
-        epsg = (32600 if lat_c >= 0 else 32700) + utm_zone
-        t = pyproj.Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}",
-                                        always_xy=True)
-        # Project the four corners so we pick up any distortion at the edges.
-        corners = [(west, south), (east, south), (east, north), (west, north)]
-        xs, ys = zip(*(t.transform(lo, la) for lo, la in corners))
-        raw_w = max(xs) - min(xs)
-        raw_h = max(ys) - min(ys)
-        tiles_w = max(C.CELL_SIZE, _ceil_to(raw_w / meters_per_tile, C.CELL_SIZE))
-        tiles_h = max(C.CELL_SIZE, _ceil_to(raw_h / meters_per_tile, C.CELL_SIZE))
-        # Re-center: expand bbox in meters to match the rounded-up tile count.
-        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-        half_w_m = (tiles_w * meters_per_tile) / 2
-        half_h_m = (tiles_h * meters_per_tile) / 2
-        return cls(south, west, north, east, meters_per_tile,
-                   tiles_w, tiles_h,
-                   cx - half_w_m, cy - half_h_m,
-                   t, rotation)
-
-    def to_px(self, lat: float, lon: float) -> tuple[float, float]:
-        x_m, y_m = self._transformer.transform(lon, lat)
-        if self.rotation:
-            cx = self.min_x_m + self.width * self.meters_per_tile / 2
-            cy = self.min_y_m + self.height * self.meters_per_tile / 2
-            a = math.radians(self.rotation)
-            dx, dy = x_m - cx, y_m - cy
-            x_m = cx + dx * math.cos(a) - dy * math.sin(a)
-            y_m = cy + dx * math.sin(a) + dy * math.cos(a)
-        px = (x_m - self.min_x_m) / self.meters_per_tile
-        # Image Y grows downward; UTM Y grows northward → flip.
-        py = self.height - (y_m - self.min_y_m) / self.meters_per_tile
-        return px, py
-
-    def to_latlon(self, px: float, py: float) -> tuple[float, float]:
-        """The inverse of to_px."""
-        back = getattr(self, "_back", None)
-        if back is None:
-            back = pyproj.Transformer.from_crs(self._transformer.target_crs,
-                                               "EPSG:4326", always_xy=True)
-            object.__setattr__(self, "_back", back)
-        x_m = self.min_x_m + px * self.meters_per_tile
-        y_m = self.min_y_m + (self.height - py) * self.meters_per_tile
-        if self.rotation:
-            cx = self.min_x_m + self.width * self.meters_per_tile / 2
-            cy = self.min_y_m + self.height * self.meters_per_tile / 2
-            a = math.radians(-self.rotation)
-            dx, dy = x_m - cx, y_m - cy
-            x_m = cx + dx * math.cos(a) - dy * math.sin(a)
-            y_m = cy + dx * math.sin(a) + dy * math.cos(a)
-        lon, lat = back.transform(x_m, y_m)
-        return lat, lon
-
-    def latlon_bbox(self) -> tuple[float, float, float, float]:
-        """(south, west, north, east) covering the whole map, turned or not."""
-        back = pyproj.Transformer.from_crs(self._transformer.target_crs,
-                                           "EPSG:4326", always_xy=True)
-        w_m = self.width * self.meters_per_tile
-        h_m = self.height * self.meters_per_tile
-        cx, cy = self.min_x_m + w_m / 2, self.min_y_m + h_m / 2
-        a = math.radians(-self.rotation)
-        lons, lats = [], []
-        for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
-            dx, dy = sx * w_m / 2, sy * h_m / 2
-            lon, lat = back.transform(cx + dx * math.cos(a) - dy * math.sin(a),
-                                      cy + dx * math.sin(a) + dy * math.cos(a))
-            lons.append(lon)
-            lats.append(lat)
-        return min(lats), min(lons), max(lats), max(lons)
-
-    def cell_grid(self) -> tuple[int, int]:
-        return self.width // C.CELL_SIZE, self.height // C.CELL_SIZE
+from .osm import (FENCE_BARRIERS, GATE_BARRIERS, OSMFeature,
+                  ROAD_HIERARCHY_BY_CODE, ROAD_HIERARCHY_CODES, classify,
+                  road_hierarchy)
+from .rendering.geometry import (_draw_line, _draw_polygon, _feature_coords_px,
+                                 _is_polygon, _paint_multipolygon,
+                                 _pixel_width)
+from .rendering.landcover import (AREA_CATEGORIES, DENSE_COVERAGE,
+                                  GREEN_CATEGORIES, LANDSCAPE_FILL,
+                                  LANDSCAPE_ORDER, VEG_CATEGORIES,
+                                  WATERWAY_WIDTH_M)
+from .rendering.projection import Projector, _inside, shape_px
+from .rendering.widths import (ROAD_WIDTHS_M, _road_markings,
+                               _sidewalk_width_m, _verge_width_m, _way_width_m)
+# </imports>
 
 
 # Roads that count towards a town's street grid. Paths wander, and a motorway
@@ -163,52 +71,6 @@ DISTRICT_CLUSTER_DEG = 12.0
 # line would leave the town an island in a field; the main roads out of it
 # stay, the side streets and driveways of places not chosen do not.
 THROUGH_ROADS = ("road_major", "road_medium")
-
-
-def shape_px(shape: dict | None, proj: Projector):
-    """A drawn selection (GeoJSON Polygon or MultiPolygon, lon/lat) in tile
-    coordinates, or None for a plain rectangle."""
-    if not shape:
-        return None
-    from shapely.geometry import MultiPolygon, Polygon
-
-    polys = shape["coordinates"] if shape.get("type") == "MultiPolygon" else [shape["coordinates"]]
-    parts = []
-    for rings in polys:
-        if not rings or len(rings[0]) < 3:
-            continue
-        outer = [proj.to_px(lat, lon) for lon, lat in rings[0]]
-        holes = [[proj.to_px(lat, lon) for lon, lat in r] for r in rings[1:] if len(r) >= 3]
-        poly = Polygon(outer, holes)
-        parts.append(poly if poly.is_valid else poly.buffer(0))
-    if not parts:
-        return None
-    merged = parts[0] if len(parts) == 1 else MultiPolygon(
-        [g for p in parts for g in (getattr(p, "geoms", None) or [p])])
-    return merged if merged.is_valid else merged.buffer(0)
-
-
-def _inside(feat: OSMFeature, proj: Projector, shape) -> bool:
-    """Whether a feature belongs to the drawn shape: its middle is inside."""
-    from shapely.geometry import LineString, Point, Polygon
-
-    if feat.kind == "relation":
-        rings = [ring for role, ring in feat.role_geoms if role != "inner" and len(ring) >= 3]
-        if not rings:
-            return False
-        geom = Polygon([proj.to_px(la, lo) for la, lo in rings[0]])
-        geom = geom if geom.is_valid else geom.buffer(0)
-        return not geom.is_empty and shape.contains(geom.representative_point())
-    pts = [proj.to_px(la, lo) for la, lo in feat.geometry]
-    if not pts:
-        return False
-    if len(pts) >= 3 and pts[0] == pts[-1]:
-        geom = Polygon(pts)
-        spot = geom.representative_point() if geom.is_valid else Point(pts[0])
-        return shape.contains(spot)
-    if len(pts) >= 2:
-        return shape.intersects(LineString(pts))
-    return shape.contains(Point(pts[0]))
 
 
 def _clip_to_shape(landscape: Image.Image, shape, buckets: dict[str, list[OSMFeature]],
@@ -258,27 +120,6 @@ def _clip_to_shape(landscape: Image.Image, shape, buckets: dict[str, list[OSMFea
         if outside.any():
             grass = Image.new("RGB", (w, y1 - y0), C.DARK_GRASS)
             landscape.paste(grass, (0, y0), Image.fromarray(outside.astype(np.uint8) * 255))
-
-
-def cover_bbox(south: float, west: float, north: float, east: float,
-               meters_per_tile: float) -> tuple[float, float, float, float]:
-    """A (south, west, north, east) box holding the map however it is turned.
-
-    The map is a rectangle of whole cells round the selection; turned, it
-    sweeps a circle through its corners. The box round that circle holds every
-    feature the map could show at any angle, so one download serves both
-    measuring the street grid and drawing the turned map.
-    """
-    proj = Projector.build(south, west, north, east, meters_per_tile)
-    w_m = proj.width * meters_per_tile
-    h_m = proj.height * meters_per_tile
-    cx, cy = proj.min_x_m + w_m / 2, proj.min_y_m + h_m / 2
-    r = math.hypot(w_m, h_m) / 2 + 50       # a margin for ways just outside
-    back = pyproj.Transformer.from_crs(proj._transformer.target_crs, "EPSG:4326",
-                                       always_xy=True)
-    lons, lats = zip(*(back.transform(cx + dx, cy + dy)
-                       for dx in (-r, r) for dy in (-r, r)))
-    return min(lats), min(lons), max(lats), max(lons)
 
 
 def _grid_delta(a: float, b: float) -> float:
@@ -403,263 +244,6 @@ def dominant_road_angle(features: Iterable[OSMFeature], south: float, west: floa
     return angle, _magnitude / total
 
 
-def _ceil_to(value: float, step: int) -> int:
-    return int(math.ceil(value / step) * step)
-
-
-# --- feature painting ------------------------------------------------------
-
-# Paint order for landscape: later categories overwrite earlier ones, so this
-# is effectively painted bottom-to-top.
-LANDSCAPE_ORDER = [
-    # Broad land use first, so anything more specific inside it - a pitch in a
-    # schoolyard, a car park on an industrial estate - is painted over it.
-    "residential",    # gardens and yards
-    "commercial",     # pavement in front of shops
-    "industrial",     # gravel yards
-    "military",
-    "schoolyard",
-    "hospital_grounds",
-    "worship_grounds",
-    "cemetery",
-    "orchard",
-    "farmland",       # light grass
-    "grass",          # medium grass
-    "park",           # medium grass w/ trees added by vegetation pass
-    "sports",
-    "wetland",
-    "sand",
-    "dirt",
-    "playground",
-    "track",
-    # Water under the ways that cross it: a river polygon painted last erased
-    # every bridge, leaving no way over. Above land use, which it still wins.
-    "water",
-    "pool",
-    "railway",        # gravel track bed; roads cross it at level crossings
-    "dirt_path",      # thin dirt line
-    "paved_path",     # footway, pavement, cycleway
-    "pier",           # jetties and breakwaters, over the water
-    "parking",        # car park tarmac
-    "plaza",          # paved pedestrian square
-    "pedestrian",     # pedestrian zone, paved wall to wall
-    "road_service",   # alleys and driveways
-    "road_minor",
-    "road_medium",
-    "road_major",     # widest, so it wins at junctions
-    # Building footprints are not painted at all. They used to be dirt, which
-    # showed as a brown fringe wherever the placed building and the painted
-    # footprint disagreed by a tile - and the building's own floor covers the
-    # ground under it anyway.
-]
-
-# Waterways drawn from a centre line, when no area is mapped around them.
-# A river is usually mapped with its banks too, which paints over this.
-WATERWAY_WIDTH_M = {"river": 12.0, "canal": 8.0, "stream": 2.0}
-
-# Road widths in meters. Converted to pixels by dividing by meters_per_tile.
-#
-# These are the fallbacks. A way carrying lanes= or width= is measured from
-# those instead, because every street in a class being identically wide is what
-# made the towns read as a printed circuit rather than a place - real ones have
-# a four-lane high street feeding two-lane side roads feeding one-car alleys.
-ROAD_WIDTHS_M = {
-    "road_major": 12.0,
-    "road_medium": 8.0,
-    "road_minor": 6.0,
-    "road_service": 3.5,
-    # A pedestrian zone is as wide as the square it paves, not as wide as
-    # a lane; mapped as lines with no area round them, this is what fills
-    # the space between the buildings.
-    "pedestrian": 9.0,
-    "dirt_path": 2.5,
-    "paved_path": 2.5,
-    "pier": 3.0,
-    "railway": 4.0,
-}
-ROAD_WIDTHS_BY_HIERARCHY_M = {
-    "motorway": 24.0, "trunk": 16.0, "primary": 12.0,
-    "secondary": 9.0, "tertiary": 7.0, "residential": 6.0,
-    "service": 3.5, "footway": 2.5,
-}
-
-# Metres of kerb either side. Town streets in the vanilla game sit in a band of
-# pale concrete; without it the asphalt runs straight into grass and every road
-# looks like it was dropped on the landscape rather than built into it.
-SIDEWALK_M = {
-    "road_major": 2.5,
-    "road_medium": 3.5,
-    "road_minor": 3.0,
-}
-# Of that, the strip of grass between the kerb and the pavement on a
-# residential street - Knox County's streets run kerb, verge, pavement, lawn.
-# In a built-up block the verge is paved over with the rest of the ground.
-VERGE_M = {
-    "road_medium": 1.5,
-    "road_minor": 1.5,
-}
-SIDEWALK_BY_HIERARCHY_M = {
-    "motorway": 0.0, "trunk": 1.5, "primary": 2.5,
-    "secondary": 2.5, "tertiary": 2.5, "residential": 2.5,
-    "service": 0.5,
-}
-VERGE_BY_HIERARCHY_M = {
-    "motorway": 0.0, "trunk": 0.0, "primary": 0.0,
-    "secondary": 0.5, "tertiary": 1.0, "residential": 1.5,
-    "service": 0.0,
-}
-
-
-def _sidewalk_width_m(feat: OSMFeature, cat: str) -> float:
-    return SIDEWALK_BY_HIERARCHY_M.get(road_hierarchy(feat.tags),
-                                      SIDEWALK_M.get(cat, 0.0))
-
-
-def _verge_width_m(feat: OSMFeature, cat: str) -> float:
-    return VERGE_BY_HIERARCHY_M.get(road_hierarchy(feat.tags),
-                                    VERGE_M.get(cat, 0.0))
-
-LANDSCAPE_FILL = {
-    "water": C.WATER,
-    "sand": C.SAND,
-    "dirt": C.DIRT,
-    "dirt_path": C.DIRT,
-    "paved_path": C.PALE_CONCRETE,
-    "pier": C.PALE_CONCRETE,
-    "railway": C.LIGHT_ASPHALT,
-    "grass": C.MEDIUM_GRASS,
-    "park": C.MEDIUM_GRASS,
-    "farmland": C.LIGHT_GRASS,
-    # street/street2/street4 in Rules.txt. road_minor used to paint
-    # lightgravel, which put a gravel track through the middle of every
-    # residential street in town.
-    # Service lanes were gravel, which next to slab pavements read as more
-    # pavement. Main roads get the worn speckled tarmac so they stand apart
-    # from the smooth tarmac of ordinary streets; both blend at the edges.
-    "road_service": C.DARKEST_ASPHALT,
-    "pedestrian": C.PAVING,
-    "road_minor": C.MEDIUM_ASPHALT,
-    "road_medium": C.MEDIUM_ASPHALT,
-    "road_major": C.DARKEST_ASPHALT,
-    "parking": C.DARK_ASPHALT,
-    "plaza": C.PAVING,
-    "residential": C.MEDIUM_GRASS,
-    "commercial": C.PALE_CONCRETE,
-    "industrial": C.LIGHT_ASPHALT,
-    "military": C.DIRT,
-    "schoolyard": C.PALE_CONCRETE,
-    "hospital_grounds": C.MEDIUM_GRASS,
-    "worship_grounds": C.PAVING,
-    "cemetery": C.LIGHT_GRASS,
-    "orchard": C.MEDIUM_GRASS,
-    "sports": C.MEDIUM_GRASS,
-    "wetland": C.DARK_GRASS,
-    "playground": C.SAND,
-    "track": C.CLAY,
-    "pool": C.WATER,
-}
-
-# Categories knoxbuild needs as areas, to tell what a building standing in
-# them probably is: an untagged building on an industrial estate is a works,
-# not a house.
-AREA_CATEGORIES = {"residential", "commercial", "industrial", "military",
-                   "schoolyard", "hospital_grounds", "worship_grounds",
-                   "cemetery", "parking", "sports", "park", "playground"}
-# Drawn onto the vegetation bitmap rather than the ground.
-VEG_CATEGORIES = {"forest", "scrub", "tree_single", "hedge", "orchard",
-                  "cemetery", "wetland"}
-
-
-def _way_width_m(feat: OSMFeature, cat: str) -> float:
-    """Carriageway width for this way, from its own tags where it has them."""
-    base = ROAD_WIDTHS_BY_HIERARCHY_M.get(road_hierarchy(feat.tags),
-                                         ROAD_WIDTHS_M[cat])
-    raw = feat.tags.get("width") or feat.tags.get("est_width")
-    if raw:
-        # OSM widths are metres unless suffixed; "7", "7 m" and "7.5" all occur.
-        try:
-            given = float(str(raw).split()[0].replace(",", "."))
-            # "nan" is a number to float(), and min(30.0, nan) is 30.0: a road
-            # tagged width=nan came out thirty metres wide.
-            if math.isfinite(given):
-                return max(2.0, min(30.0, given))
-        except (ValueError, IndexError):      # IndexError: a width of " "
-            pass
-    lanes = feat.tags.get("lanes")
-    if lanes:
-        try:
-            n = max(1, min(8, int(str(lanes).split(";")[0])))
-        except ValueError:
-            n = 0
-        if n:
-            # 3.2 m a lane, plus a little for the shoulder and markings.
-            width = n * 3.2 + 1.0
-            if feat.tags.get("oneway") == "yes":
-                width = max(width, 3.5)
-            return width
-    return base
-
-
-def _pixel_width(metres: float, metres_per_tile: float) -> int:
-    """Convert a real width to the nearest whole bitmap tile, never zero."""
-    return max(1, int(math.floor(metres / max(0.05, metres_per_tile) + 0.5)))
-
-
-def _road_markings(feat: OSMFeature, cat: str) -> list[tuple[str, float]]:
-    """(color, offset in metres) for lane markings across a road centerline."""
-    width = _way_width_m(feat, cat)
-    if any(str(feat.tags.get(key, "")).lower() == "no"
-           for key in ("centreline", "centerline", "road_marking")):
-        return []
-    raw_lanes = str(feat.tags.get("lanes") or "").split(";")[0].strip()
-    try:
-        lanes = max(1, min(8, int(float(raw_lanes)))) if raw_lanes else max(
-            1, min(8, int(round(width / 3.2))))
-    except ValueError:
-        lanes = max(1, min(8, int(round(width / 3.2))))
-    if lanes < 2:
-        return []
-
-    oneway = (str(feat.tags.get("oneway") or "").lower() in ("yes", "1", "-1")
-              or feat.tags.get("junction") == "roundabout")
-    lane_width = width / lanes
-    if oneway:
-        return [("white", -width / 2 + lane_width * lane)
-                for lane in range(1, lanes)]
-
-    markings = [("yellow", 0.0)]
-    lanes_per_direction = lanes // 2
-    if lanes >= 4:
-        for lane in range(1, lanes_per_direction):
-            offset = lane_width * lane
-            markings.extend((("white", -offset), ("white", offset)))
-    return markings
-
-
-def _feature_coords_px(feat: OSMFeature, proj: Projector) -> list[list[tuple[float, float]]]:
-    """Project every ring/linestring in this feature to pixel space."""
-    if feat.kind == "way":
-        return [[proj.to_px(la, lo) for la, lo in feat.geometry]]
-    if feat.kind == "relation":
-        rings: list[list[tuple[float, float]]] = []
-        for _role, coords in feat.role_geoms:
-            rings.append([proj.to_px(la, lo) for la, lo in coords])
-        return rings
-    if feat.kind == "node":
-        la, lo = feat.geometry[0]
-        return [[proj.to_px(la, lo)]]
-    return []
-
-
-def _is_polygon(feat: OSMFeature) -> bool:
-    """Treat as polygon if first/last point match (way) or it's a relation."""
-    if feat.kind == "relation":
-        return True
-    if feat.kind == "way" and len(feat.geometry) >= 3:
-        return feat.geometry[0] == feat.geometry[-1]
-    return False
-
-
 def _road_hierarchy_image(buckets: dict[str, list[OSMFeature]], proj: Projector) -> Image.Image:
     """Rasterize road class over the right-of-way for downstream map passes."""
     image = Image.new("L", (proj.width, proj.height), 0)
@@ -677,52 +261,6 @@ def _road_hierarchy_image(buckets: dict[str, list[OSMFeature]], proj: Projector)
                 _draw_line(draw, _feature_coords_px(feat, proj), code,
                            _pixel_width(width, proj.meters_per_tile))
     return image
-
-
-def _paint_multipolygon(image: Image.Image, feat: OSMFeature, proj: Projector,
-                        fill: tuple[int, int, int]) -> None:
-    """Fill a relation's outer rings and leave its inner rings as they were.
-
-    An island in a lake or a clearing in a wood is an inner ring. Drawn like
-    the outers it was flooded or planted over; here it is cut out of a mask
-    the size of the relation, so whatever lies under it shows through.
-    """
-    rings = [(role, [proj.to_px(la, lo) for la, lo in ring])
-             for role, ring in feat.role_geoms if len(ring) >= 3]
-    if not rings:
-        return
-    xs = [x for _r, ring in rings for x, _y in ring]
-    ys = [y for _r, ring in rings for _x, y in ring]
-    x0, y0 = max(0, int(min(xs))), max(0, int(min(ys)))
-    x1, y1 = min(image.width, int(max(xs)) + 2), min(image.height, int(max(ys)) + 2)
-    if x1 <= x0 or y1 <= y0:
-        return
-    mask = Image.new("L", (x1 - x0, y1 - y0), 0)
-    md = ImageDraw.Draw(mask)
-    for role, ring in sorted(rings, key=lambda r: r[0] == "inner"):
-        md.polygon([(x - x0, y - y0) for x, y in ring],
-                   fill=0 if role == "inner" else 255)
-    image.paste(Image.new("RGB", mask.size, fill), (x0, y0), mask)
-
-
-def _draw_polygon(draw: ImageDraw.ImageDraw, rings: list[list[tuple[float, float]]],
-                  fill: tuple[int, int, int]) -> None:
-    for ring in rings:
-        if len(ring) >= 3:
-            draw.polygon(ring, fill=fill)
-
-
-def _draw_line(draw: ImageDraw.ImageDraw, rings: list[list[tuple[float, float]]],
-               fill: tuple[int, int, int], width_px: int) -> None:
-    w = max(1, int(round(width_px)))
-    for ring in rings:
-        if len(ring) >= 2:
-            draw.line(ring, fill=fill, width=w, joint="curve")
-            # Round line caps so intersections look right.
-            r = w // 2
-            if r > 0:
-                for x, y in ring:
-                    draw.ellipse((x - r, y - r, x + r, y + r), fill=fill)
 
 
 # --- main entry point ------------------------------------------------------
@@ -1009,16 +547,6 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
         cells_x=cells_x,
         cells_y=cells_y,
     )
-
-
-# A city block is paved when buildings cover at least this share of it - the
-# same line knoxbuild draws between a city and a suburb.
-# Measured: central Paris, Kadikoy and a Tokyo neighbourhood sit at 0.4-0.5, a
-# US suburb and a French village around 0.16.
-DENSE_COVERAGE = 0.28
-# Mapped green space keeps its grass however built-up the area around it is.
-GREEN_CATEGORIES = {"park", "grass", "sports", "cemetery", "orchard", "farmland",
-                    "wetland", "hospital_grounds"}
 
 
 def sea_polygons(feats: list[OSMFeature], proj: Projector) -> list:
