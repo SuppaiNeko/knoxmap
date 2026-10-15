@@ -1988,6 +1988,7 @@ def check_memory_guard(check) -> None:
     figure in its log."""
     import app as knoxapp
     import knoxlog
+    from web import checks as webchecks
 
     real = knoxlog.memory_status
     try:
@@ -1996,12 +1997,12 @@ def check_memory_guard(check) -> None:
         class Small:                      # a 32-bit Python
             maxsize = 2 ** 32 - 1
 
-        was, knoxapp.sys = knoxapp.sys, Small
+        was, webchecks.sys = webchecks.sys, Small
         try:
             big = knoxapp._too_big_for_memory(5400, 6000)
             small = knoxapp._too_big_for_memory(1200, 1200)
         finally:
-            knoxapp.sys = was
+            webchecks.sys = was
         import knoxpaths as _kp
         check(big and "32-bit" in big and _kp.setup_command() in big and not small,
               "a map too big for a 32-bit Python is warned about, with a way out")
