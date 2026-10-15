@@ -613,7 +613,7 @@ def _why(proc) -> str:
 
 
 # Each WorldEd process peaks around a gigabyte on a 4x4 batch (see COMPILE_BATCH
-# in app.py), so how many may run together is bounded by memory as much as by
+# in web/compiling.py), so how many may run together is bounded by memory as much as by
 # cores. "compile_workers" in knoxmap_config.json overrides this; 1 is the old
 # one-at-a-time behaviour.
 GB_PER_WORKER = 3.0

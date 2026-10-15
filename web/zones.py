@@ -1,6 +1,4 @@
-"""Editing a map after it is drawn: its features, edits, sketch, design sheet, board and zones.
-"""
-# <imports bp=zones>
+"""Editing a map after it is drawn: its features, edits, sketch, design sheet, board and zones."""
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
@@ -14,7 +12,6 @@ from web.mapfiles import (_load_design, _load_edits, _load_settings,
                           _save_design, _save_edits, _save_sketch)
 
 bp = Blueprint("zones", __name__)
-# </imports>
 
 
 # How many features one look at the map may bring back. A city has a hundred

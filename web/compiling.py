@@ -1,6 +1,4 @@
-"""Compiling a built map into the game's lot files (tools/compile_map.py does the work).
-"""
-# <imports bp=compiling>
+"""Compiling a built map into the game's lot files (tools/compile_map.py does the work)."""
 from __future__ import annotations
 
 import json
@@ -18,7 +16,6 @@ from web.common import _json_body, _map_dir, _worlded_exe, log
 from web.jobs import _COMPILE, _PROGRESS_LOCK, _done_stopping, _stopper
 
 bp = Blueprint("compiling", __name__)
-# </imports>
 
 
 # Source cells per side handed to one WorldEd process. 4x4 keeps its peak

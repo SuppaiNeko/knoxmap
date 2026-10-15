@@ -1,7 +1,6 @@
 """The window's own housekeeping: error and problem reports, language files, setup
 and health checks, the settings the page reads, Steam libraries and installing a map.
 """
-# <imports bp=system>
 from __future__ import annotations
 
 import io
@@ -24,7 +23,6 @@ from web.common import BASE_DIR, SAFE_NAME, _json_body, _map_dir, failed, log
 from web.mapfiles import _load_settings
 
 bp = Blueprint("system", __name__)
-# </imports>
 
 
 @bp.route("/api/client-error", methods=["POST"])

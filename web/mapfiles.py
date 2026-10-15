@@ -1,6 +1,4 @@
-"""Files that belong to one map folder: its settings, edits, sketch and design.
-"""
-# <imports>
+"""Files that belong to one map folder: its settings, edits, sketch and design."""
 from __future__ import annotations
 
 import json
@@ -12,7 +10,6 @@ from generator import edits as mapedits
 from generator import osm, renderer
 from knoxbuild import mapstate
 from knoxbuild.settings import Settings
-# </imports>
 
 
 SETTINGS_FILE = "settings.json"
@@ -190,3 +187,11 @@ def _map_summary(map_dir: Path) -> dict:
             "readme": f"/output/{map_dir.name}/README.txt",
         },
     }
+
+
+def _population(map_dir: Path) -> dict | None:
+    try:
+        with open(map_dir / f"{map_dir.name}_population.json", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None

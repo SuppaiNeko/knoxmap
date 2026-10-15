@@ -385,7 +385,7 @@ splits a large request into a grid of sub-queries of `OVERPASS_TILE_KM2`
 `out geom` returns a way's complete geometry from every tile it touches, so
 features that straddle a boundary survive whole.
 
-Current rails, all in `app.py`:
+Current rails, all in `web/checks.py`:
 
 | | | |
 |---|---|---|

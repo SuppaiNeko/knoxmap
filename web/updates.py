@@ -1,6 +1,4 @@
-"""Updates and the version menu (updater.py does the work).
-"""
-# <imports bp=updates>
+"""Updates and the version menu (updater.py does the work)."""
 from __future__ import annotations
 
 import os
@@ -12,7 +10,6 @@ from flask import Blueprint, jsonify, request
 from web.common import failed, log
 
 bp = Blueprint("updates", __name__)
-# </imports>
 
 
 @bp.route("/api/update")

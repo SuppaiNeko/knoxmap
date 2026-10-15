@@ -43,7 +43,7 @@ HEADER = """\
 
 # Text that is not worth translating: names, symbols and numbers.
 SKIP = {"KnoxMap", "discord", "OpenStreetMap", "Leaflet", "×", "→", "?"}
-# These preset validation errors come from app.py rather than a page script.
+# These preset validation errors come from web/presets.py rather than a page script.
 # They are shown in the Saved areas panel just like client-side messages.
 PRESET_ERRORS = (
     "This is not a KnoxMap preset version 1.",

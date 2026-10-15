@@ -30,7 +30,7 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Python parses
-        run: python -m compileall -q app.py knoxmap.py knoxmap_setup.py knoxpaths.py generator knoxbuild tools worlded
+        run: python -m compileall -q app.py knoxmap.py knoxmap_setup.py knoxpaths.py generator knoxbuild tools web worlded
 
       - name: JavaScript parses
         run: |

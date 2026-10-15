@@ -1,6 +1,4 @@
-"""Shared by every route module: paths, the logger, error replies and small request helpers.
-"""
-# <imports>
+"""Shared by every route module: paths, the logger, error replies and small request helpers."""
 from __future__ import annotations
 
 import re
@@ -9,12 +7,12 @@ from pathlib import Path
 from flask import jsonify, request
 
 import knoxlog
-# </imports>
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
+CACHE_DIR = BASE_DIR / "cache"
 
 log = knoxlog.setup("app")
 

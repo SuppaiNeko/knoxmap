@@ -3020,6 +3020,8 @@ def check_portable_presets(check, work: str) -> None:
     import os as _os
     from unittest.mock import patch
 
+    from web import presets as webpresets
+
     client = knoxapp.app.test_client()
     polygon = {"type": "Polygon", "coordinates": [
         [[20, 40], [20.01, 40], [20.01, 40.01], [20, 40.01], [20, 40]]]}
@@ -3082,7 +3084,7 @@ def check_portable_presets(check, work: str) -> None:
           "a malformed optional style name cannot crash a preset import")
     target_root = Path(work) / "portable_preset_export"
     target_root.mkdir(exist_ok=True)
-    with patch.object(knoxapp, "BASE_DIR", target_root), \
+    with patch.object(webpresets, "BASE_DIR", target_root), \
             patch("knoxlog.open_folder") as show, \
             patch.dict(_os.environ, {"KNOXMAP_WINDOW": "1"}):
         first = client.post("/api/presets/export", json=data)
@@ -4092,12 +4094,12 @@ def main(argv: list[str]) -> int:
 
         def _boom():
             raise ValueError("selftest boom")
-        real = knoxmap_app.app.view_functions["api_lots"]
-        knoxmap_app.app.view_functions["api_lots"] = _boom
+        real = knoxmap_app.app.view_functions["maps.api_lots"]
+        knoxmap_app.app.view_functions["maps.api_lots"] = _boom
         try:
             reply = client.get("/api/lots?map=x")
         finally:
-            knoxmap_app.app.view_functions["api_lots"] = real
+            knoxmap_app.app.view_functions["maps.api_lots"] = real
         body = reply.get_json(silent=True) or {}
         logged = open(knoxlog.MAIN_LOG, encoding="utf-8").read() if knoxlog.MAIN_LOG.exists() else ""
         check(reply.status_code == 500 and reply.is_json and str(body.get("errorId", "")).startswith("E-")

@@ -27,7 +27,7 @@ Source: [Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/
 
 | Requirement | How KnoxMap meets it |
 |---|---|
-| Installed apps must send their own User-Agent naming the app, never a browser's. | Tiles are fetched by KnoxMap's local server (`/tiles` in `app.py`) with `KnoxMap/1.0 (+repository URL)`, not by the app window. |
+| Installed apps must send their own User-Agent naming the app, never a browser's. | Tiles are fetched by KnoxMap's local server (`/tiles` in `web/geo.py`) with `KnoxMap/1.0 (+repository URL)`, not by the app window. |
 | Honour caching headers, or cache for at least 7 days. | Tiles are kept in `cache/tiles` for the longer of 7 days and the server's `max-age`, and revalidated with `If-None-Match`. |
 | No bulk downloading, pre-seeding or offline use. | Only tiles the map is showing are requested, at most two at a time. |
 | Attribution visible on the map. | Bottom right, not hidden. |

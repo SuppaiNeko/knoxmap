@@ -1,7 +1,6 @@
 """Making a map: generate, the pictures, buildings and zombies steps, the layout preview
 and handing a map to WorldEd.
 """
-# <imports bp=generation>
 from __future__ import annotations
 
 import io
@@ -32,11 +31,10 @@ from web.common import (SAFE_NAME, _bbox_area_km2, _cos_lat, _json_body,
                         _map_dir, _worlded_exe, failed, log)
 from web.jobs import _PROGRESS_LOCK, _set_progress, _stopped, _stopper
 from web.mapfiles import (_load_edits, _load_settings, _load_sketch,
-                          _map_summary, _osm_cache_for, _save_design,
-                          _save_settings, _save_sketch)
+                          _map_summary, _osm_cache_for, _population,
+                          _save_design, _save_settings, _save_sketch)
 
 bp = Blueprint("generation", __name__)
-# </imports>
 
 
 @bp.route("/api/generate", methods=["POST"])
@@ -439,14 +437,6 @@ def api_buildings():
                     "pzw": f"{map_dir.name}.pzw",
                     "settings": settings.to_dict(),
                     "population": _population(map_dir)})
-
-
-def _population(map_dir: Path) -> dict | None:
-    try:
-        with open(map_dir / f"{map_dir.name}_population.json", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
 
 
 @bp.route("/api/layout-preview")

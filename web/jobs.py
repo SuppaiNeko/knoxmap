@@ -1,6 +1,4 @@
-"""Progress and stop requests for the long jobs: generate, build and compile.
-"""
-# <imports bp=jobs>
+"""Progress and stop requests for the long jobs: generate, build and compile."""
 from __future__ import annotations
 
 import threading
@@ -10,7 +8,6 @@ from flask import Blueprint, jsonify, request
 from web.common import _json_body, failed, log
 
 bp = Blueprint("jobs", __name__)
-# </imports>
 
 
 # Big maps take minutes, so generation reports where it has got to and the page

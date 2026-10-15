@@ -1,6 +1,4 @@
-"""Where things are: the map tiles, the place search, landmarks and the Overpass servers.
-"""
-# <imports bp=geo>
+"""Where things are: the map tiles, the place search, landmarks and the Overpass servers."""
 from __future__ import annotations
 
 import json
@@ -14,10 +12,9 @@ from flask import Blueprint, jsonify, request, send_file
 from generator import osm, places
 
 from web.checks import BIG_LANDMARK_KM2
-from web.common import BASE_DIR, _bbox_area_km2, _json_body, log
+from web.common import CACHE_DIR, _bbox_area_km2, _json_body, log
 
 bp = Blueprint("geo", __name__)
-# </imports>
 
 
 # ---- map tiles, fetched the way the OSM tile policy asks -------------------------
@@ -30,7 +27,6 @@ bp = Blueprint("geo", __name__)
 # identity and cached nothing. Tiles now come through here: fetched only when
 # the map shows them, with KnoxMap's User-Agent, kept on disk and revalidated.
 TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-CACHE_DIR = BASE_DIR / "cache"
 TILE_CACHE = CACHE_DIR / "tiles"
 TILE_MIN_AGE = 7 * 24 * 3600
 # How many tiles are fetched at once. A map view is twenty or thirty tiles,

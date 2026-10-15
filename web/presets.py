@@ -1,6 +1,4 @@
-"""Saved areas and the building builder: presets.json and the builder's design routes.
-"""
-# <imports bp=presets>
+"""Saved areas and the building builder: presets.json and the builder's design routes."""
 from __future__ import annotations
 
 import io
@@ -20,7 +18,6 @@ from web.checks import (MAX_METERS_PER_TILE, MIN_METERS_PER_TILE, _clean_shape,
 from web.common import BASE_DIR, _json_body, _map_dir, failed
 
 bp = Blueprint("presets", __name__)
-# </imports>
 
 
 @bp.route("/api/presets/buildings", methods=["GET"])

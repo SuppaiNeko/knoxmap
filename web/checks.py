@@ -1,13 +1,11 @@
 """What makes an area or a scale acceptable: the sizes the window warns about, a drawn
 outline checked and folded, and whether a map will fit in memory.
 """
-# <imports>
 from __future__ import annotations
 
 import sys
 
 import knoxlog
-# </imports>
 
 
 # Where a map stops being an easy one. None of these refuses anything: they
