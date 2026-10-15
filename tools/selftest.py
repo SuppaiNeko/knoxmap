@@ -2485,6 +2485,20 @@ def check_odd_requests(check, work: str) -> None:
         check(all(client.post("/api/client-error", json=v).status_code == 200
                   for v in ("x", 5, [], None)),
               "the page's error report is taken whatever it sends")
+        import knoxlog
+        before = open(knoxlog.MAIN_LOG, encoding="utf-8").read().count("page error")
+        client.post("/api/client-error", json={})
+        check(open(knoxlog.MAIN_LOG, encoding="utf-8").read().count("page error") == before,
+              "an empty page error report is not written to the log")
+        was_mem = knoxlog.memory_status
+        try:
+            knoxlog.memory_status = lambda: (8 * 2 ** 30, 4 * 2 ** 30, 2 ** 40)
+            r = client.post("/api/generate", json={"south": 10.0, "west": 10.0,
+                                                   "north": 10.1, "east": 10.1, "mapName": "x"})
+            check(r.status_code == 400 and "cannot be made here" in r.get_json()["error"],
+                  f"a map bigger than the PC's whole memory is refused ({r.status_code} {r.get_json()})")
+        finally:
+            knoxlog.memory_status = was_mem
     finally:
         knoxapp.osm.fetch_features_tiled = was_fetch
         knoxapp.OUTPUT_DIR = was_out

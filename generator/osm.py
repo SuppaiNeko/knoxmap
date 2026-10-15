@@ -737,7 +737,7 @@ TIMEOUT_SPLIT_DEPTH = 1
 # inside the same busy spell, so the retry mostly failed the way the first try
 # had. The error people saw told them to wait a few minutes and try again,
 # which worked - this is the program doing that itself.
-TILE_ATTEMPTS = 3
+TILE_ATTEMPTS = 4
 RETRY_PAUSE_S = 45
 RETRY_PAUSE_MAX_S = 180
 

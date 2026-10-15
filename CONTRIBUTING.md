@@ -26,6 +26,10 @@ and checks every `.lotheader`, `.lotpack` and `chunkdata` SHA-256 against
 The test fails if either dependency is missing. When a change to the maps is
 intentional, inspect it first, then run `python tools/regression_maps.py
 --record` to accept the new hashes. Review that manifest in the change.
+Before a release that touches the compiler, also run the 51 x 48 cell scale
+check by hand: `python tools/large_compile_check.py <map folder>`. It tiles a
+real map out to 2,448 cells, compiles and verifies them (about 43 s, 4 GB of
+disk). It is not in CI because it needs a real generated map and `knoxlots`.
 The manifest and mismatch-reporting unit checks need no extra test framework:
 `python -m unittest discover -s tests -p test_regression_maps.py`.
 
