@@ -29,219 +29,30 @@ from . import structures
 from .osm import (FENCE_BARRIERS, GATE_BARRIERS, OSMFeature,
                   ROAD_HIERARCHY_BY_CODE, ROAD_HIERARCHY_CODES, classify,
                   road_hierarchy)
+# </imports>
+
+# <reexports>
+# Everything that moved out is still importable from here: the tests, the
+# tools and knoxbuild reach into this module by name.
 from .rendering.geometry import (_draw_line, _draw_polygon, _feature_coords_px,
                                  _is_polygon, _paint_multipolygon,
-                                 _pixel_width)
+                                 _pixel_width)  # noqa: F401
+from .rendering.gridangle import (ALIGN_MIN_STRENGTH, DISTRICT_CELL_M,
+                                  DISTRICT_CLUSTER_DEG, DISTRICT_MIN_ROAD_M,
+                                  GRID_ROADS, _grid_delta, dominant_road_angle)  # noqa: F401
 from .rendering.landcover import (AREA_CATEGORIES, DENSE_COVERAGE,
                                   GREEN_CATEGORIES, LANDSCAPE_FILL,
                                   LANDSCAPE_ORDER, VEG_CATEGORIES,
-                                  WATERWAY_WIDTH_M)
-from .rendering.projection import Projector, _inside, shape_px
-from .rendering.widths import (ROAD_WIDTHS_M, _road_markings,
-                               _sidewalk_width_m, _verge_width_m, _way_width_m)
-# </imports>
-
-
-# Roads that count towards a town's street grid. Paths wander, and a motorway
-# slicing through at its own angle should not turn the town around it.
-GRID_ROADS = {"road_minor", "road_medium", "road_service", "pedestrian"}
-# How strongly the streets must agree on a direction before the map is turned
-# to it: 1 is a perfect grid, 0 no preference. Measured on test maps, gridded
-# towns sit well above this and old organic centres below it.
-ALIGN_MIN_STRENGTH = 0.25
-# Per-district street grid (dominant_road_angle). The map is one tile grid and
-# is turned by one angle, but the angle is chosen *per neighbourhood* now: the
-# bbox is cut into cells of this many metres, each cell measures its own local
-# grid, and the cells vote. Averaging a town that grew in two or three phases
-# used to land the rotation halfway between them - a compromise angle that
-# straightens none of the districts - and a long avenue at its own angle used
-# to sway the whole town because it carried more length than it deserved.
-# 400 m is a few blocks: small enough that two grids a street apart are told
-# apart, big enough that a local grid can be measured inside one cell.
-DISTRICT_CELL_M = 400.0
-# A cell with less road than this in it has nothing to vote with - a park
-# edge, a stub - and abstains rather than letting one corner decide the turn.
-DISTRICT_MIN_ROAD_M = 60.0
-# Two local grids whose angles are this close (degrees, ignoring the
-# 90-degree period of a grid) are the same district and vote together.
-DISTRICT_CLUSTER_DEG = 12.0
-
-
-# Roads that carry on past the edge of a drawn shape. Cutting every road at the
-# line would leave the town an island in a field; the main roads out of it
-# stay, the side streets and driveways of places not chosen do not.
-THROUGH_ROADS = ("road_major", "road_medium")
-
-
-def _clip_to_shape(landscape: Image.Image, shape, buckets: dict[str, list[OSMFeature]],
-                   proj: Projector) -> None:
-    """Outside the drawn shape, the ground goes back to countryside.
-
-    Water stays - a river does not stop at a line on the map - and so do the
-    main roads through it, with their pavements. Everything else outside, the
-    yards and car parks and side streets of the neighbourhood next door,
-    becomes grass.
-    """
-    import numpy as np
-
-    w, h = landscape.size
-    inside = Image.new("L", (w, h), 0)
-    d = ImageDraw.Draw(inside)
-    for part in getattr(shape, "geoms", None) or [shape]:
-        d.polygon(list(part.exterior.coords), fill=255)
-        for hole in part.interiors:
-            d.polygon(list(hole.coords), fill=0)
-    keep = inside.copy()
-    kd = ImageDraw.Draw(keep)
-    mpt = proj.meters_per_tile
-    for cat in THROUGH_ROADS:
-        for feat in buckets.get(cat, []):
-            if _is_polygon(feat):
-                continue
-            width = _pixel_width(_way_width_m(feat, cat)
-                                 + 2 * _sidewalk_width_m(feat, cat), mpt)
-            _draw_line(kd, _feature_coords_px(feat, proj), 255, width)
-    for cat in ("water", "pool", "coastline"):
-        for feat in buckets.get(cat, []):
-            if _is_polygon(feat):
-                for ring in _feature_coords_px(feat, proj):
-                    if len(ring) >= 3:
-                        kd.polygon(ring, fill=255)
-    strip = 1024
-    for y0 in range(0, h, strip):
-        y1 = min(h, y0 + strip)
-        outside = np.asarray(keep.crop((0, y0, w, y1))) == 0
-        if not outside.any():
-            continue
-        ground = np.asarray(landscape.crop((0, y0, w, y1)))
-        water = (ground[:, :, 0] == C.WATER[0]) & (ground[:, :, 1] == C.WATER[1]) \
-            & (ground[:, :, 2] == C.WATER[2])
-        outside &= ~water
-        if outside.any():
-            grass = Image.new("RGB", (w, y1 - y0), C.DARK_GRASS)
-            landscape.paste(grass, (0, y0), Image.fromarray(outside.astype(np.uint8) * 255))
-
-
-def _grid_delta(a: float, b: float) -> float:
-    """How far two grid angles are apart in degrees, ignoring the 90-degree
-    period: 44 degrees and -44 degrees are the same grid, two degrees off."""
-    d = abs(a - b) % 90.0
-    return min(d, 90.0 - d)
-
-
-def dominant_road_angle(features: Iterable[OSMFeature], south: float, west: float,
-                        north: float, east: float) -> tuple[float, float]:
-    """The main direction of a town's streets, and how strongly they share it.
-
-    Tiles are square, so a street at 20 degrees becomes a staircase with a step
-    every few tiles - kerbs zigzagging along it and blends failing at every
-    corner. Most towns have a grid, even a loose one; turning the whole map so
-    that grid runs along the tiles straightens every street on it. Buildings,
-    fences and the paper map are projected the same way, so nothing is
-    misaligned - only north is no longer straight up.
-
-    The angle is measured per district, not once over the whole town. Each
-    DISTRICT_CELL_M cell of the bbox measures its own local grid (directions
-    averaged with a 90-degree period, segments weighed by length, as before),
-    and cells whose local grid is within DISTRICT_CLUSTER_DEG of one another
-    vote together as one district. The district holding the most street wins,
-    and the rotation is its angle.
-
-    This matters where a town grew in phases: an old core on one grid and an
-    extension on another used to average into an angle that belonged to
-    neither, so both districts stayed staircases. Now the district with the
-    most street runs straight. The rotation is still one angle for the whole
-    map - the game's tile grid is global - so streets on the losing grid keep
-    their offset; "Knox County roads" is the setting that bends those.
-
-    Returns (angle, strength): the angle in degrees in (-45, 45], counter-
-    clockwise from east, and the strength in [0, 1] - how much of the town's
-    grid road the winning district's straightened direction accounts for. A
-    town with no district big enough to vote falls back to the plain
-    town-wide mean, which is what it always did.
-    """
-    proj = Projector.build(south, west, north, east, 1.0)
-    # (sin sum, cos sum, length) per district cell, plus the town-wide totals.
-    cells: dict[tuple[int, int], list[float]] = {}
-    sin_sum = cos_sum = total = 0.0
-    for feat in features:
-        if feat.kind != "way" or classify(feat.tags, _is_polygon(feat)) not in GRID_ROADS:
-            continue
-        pts = [proj.to_px(la, lo) for la, lo in feat.geometry]
-        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
-            dx, dy = bx - ax, ay - by      # tile y grows south; flip to north-up
-            length = math.hypot(dx, dy)
-            if length < 1:
-                continue
-            # Only the street that is on the map has a say. The features include
-            # what was fetched beyond it (a turned map downloads a margin all the
-            # way round, and a long way is whole however far it runs), and a
-            # bigger grid in that margin used to decide how the map was turned.
-            mid_x, mid_y = (ax + bx) / 2, (ay + by) / 2
-            if not (0 <= mid_x < proj.width and 0 <= mid_y < proj.height):
-                continue
-            a = 4 * math.atan2(dy, dx)
-            s, c = length * math.sin(a), length * math.cos(a)
-            sin_sum += s
-            cos_sum += c
-            total += length
-            key = (math.floor(mid_x / DISTRICT_CELL_M),
-                   math.floor(mid_y / DISTRICT_CELL_M))
-            slot = cells.get(key)
-            if slot is None:
-                cells[key] = [s, c, length]
-            else:
-                slot[0] += s
-                slot[1] += c
-                slot[2] += length
-    if total == 0:
-        return 0.0, 0.0
-
-    # Every cell with enough road in it is one district's vote: its local
-    # angle, weighted by how much street stands behind it and how well those
-    # streets agree (a cell of crossed lanes has little to say).
-    votes: list[tuple[float, float, float, float]] = []   # angle, weight, sin, cos
-    for s, c, length in cells.values():
-        if length < DISTRICT_MIN_ROAD_M:
-            continue
-        agree = math.hypot(s, c) / length
-        weight = length * agree
-        if weight <= 0:
-            continue
-        votes.append((math.degrees(math.atan2(s, c) / 4), weight, s, c))
-    if not votes:
-        # Only stubs and scattered lanes: no district to ask, so the town as a
-        # whole answers, exactly as it did before districts were measured.
-        return (math.degrees(math.atan2(sin_sum, cos_sum) / 4),
-                math.hypot(sin_sum, cos_sum) / total)
-
-    # Cluster the votes greedily from the strongest district outwards. Each
-    # cell joins the strongest unassigned seed it is within DISTRICT_CLUSTER_DEG
-    # of, so one grid can gather its own phase and the next seed starts a new
-    # one; the cluster with the most street wins.
-    votes.sort(key=lambda v: (-v[1], v[0]))
-    assigned = [False] * len(votes)
-    best: tuple[float, float, float] | None = None     # magnitude, sin, cos
-    for i, (seed_angle, _weight, _s, _c) in enumerate(votes):
-        if assigned[i]:
-            continue
-        assigned[i] = True
-        members = [i]
-        for j in range(i + 1, len(votes)):
-            if not assigned[j] and _grid_delta(seed_angle, votes[j][0]) <= DISTRICT_CLUSTER_DEG:
-                assigned[j] = True
-                members.append(j)
-        m_sin = sum(votes[m][2] for m in members)
-        m_cos = sum(votes[m][3] for m in members)
-        magnitude = math.hypot(m_sin, m_cos)
-        if best is None or magnitude > best[0]:
-            best = (magnitude, m_sin, m_cos)
-    _magnitude, m_sin, m_cos = best
-    angle = math.degrees(math.atan2(m_sin, m_cos) / 4)
-    # How much of the town's grid road the winning district accounts for: a
-    # second phase on the far side of the map lowers it, as disagreement did
-    # before, but no longer drags the angle off the grid it belongs to.
-    return angle, _magnitude / total
+                                  WATERWAY_WIDTH_M)  # noqa: F401
+from .rendering.projection import (Projector, _ceil_to, _inside, cover_bbox,
+                                   shape_px)  # noqa: F401
+from .rendering.sea import sea_polygons  # noqa: F401
+from .rendering.shape import THROUGH_ROADS, _clip_to_shape  # noqa: F401
+from .rendering.widths import (ROAD_WIDTHS_BY_HIERARCHY_M, ROAD_WIDTHS_M,
+                               SIDEWALK_BY_HIERARCHY_M, SIDEWALK_M,
+                               VERGE_BY_HIERARCHY_M, VERGE_M, _road_markings,
+                               _sidewalk_width_m, _verge_width_m, _way_width_m)  # noqa: F401
+# </reexports>
 
 
 def _road_hierarchy_image(buckets: dict[str, list[OSMFeature]], proj: Projector) -> Image.Image:
@@ -547,92 +358,6 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
         cells_x=cells_x,
         cells_y=cells_y,
     )
-
-
-def sea_polygons(feats: list[OSMFeature], proj: Projector) -> list:
-    """The sea inside the map, as shapely polygons in tile coordinates.
-
-    OSM maps the sea only by its shore: natural=coastline ways, each running
-    with the land on its left and the water on its right. The map rectangle is
-    cut along every shore line into faces, and each face is sea or land by
-    which side of its nearest stretch of shore it lies on. That handles a
-    headland, a bay, an island - any mix, as long as the shore is in view.
-    A map with no shore in it is taken to be land.
-    """
-    from shapely.geometry import LineString, Point, box
-    from shapely.ops import nearest_points, polygonize, unary_union
-
-    w, h = proj.width, proj.height
-    frame = box(0, 0, w, h)
-    shores = []
-    for feat in feats:
-        if feat.kind != "way" or feat.tags.get("natural") != "coastline":
-            continue
-        pts = [proj.to_px(la, lo) for la, lo in feat.geometry]
-        if len(pts) >= 2:
-            shores.append(LineString(pts))
-    if not shores:
-        return []
-    # Join the shore into as few lines as possible, then carry any end that
-    # stops inside the map on in its own direction to beyond the edge. The
-    # download holds only coast that touches the area, so a shore that wanders
-    # out of it and back arrives in pieces - and a line that does not cross
-    # the map cannot split it, which left whole bays as dry land.
-    from shapely.ops import linemerge
-    merged = linemerge(unary_union(shores)) if len(shores) > 1 else shores[0]
-    pieces = [merged] if isinstance(merged, LineString) else list(getattr(merged, "geoms", []))
-    far = 3 * (w + h)
-    inner = frame.buffer(-1)
-    shores = []
-    for line in pieces:
-        coords = list(line.coords)
-        if len(coords) < 2:
-            continue
-        if coords[0] == coords[-1]:
-            shores.append(line)          # an island: closed, nothing to extend
-            continue
-        for end, before in ((0, 1), (-1, -2)):
-            ex, ey = coords[end]
-            if inner.contains(Point(ex, ey)):
-                bx, by = coords[before]
-                dx, dy = ex - bx, ey - by
-                length = math.hypot(dx, dy) or 1.0
-                tip = (ex + dx / length * far, ey + dy / length * far)
-                coords = [tip] + coords if end == 0 else coords + [tip]
-        shores.append(LineString(coords))
-    # Clip the shore to a little beyond the frame, so lines that only graze
-    # the edge still split it, and the faces stay inside the map.
-    reach = frame.buffer(2)
-    clipped = [s.intersection(reach) for s in shores]
-    lines = [g for c in clipped for g in (getattr(c, "geoms", None) or [c])
-             if not g.is_empty and g.length > 0]
-    if not lines:
-        return []
-    faces = list(polygonize(unary_union(lines + [frame.exterior])))
-
-    def seaward(face) -> bool:
-        spot = face.representative_point()
-        best, best_d = None, None
-        for line in lines:
-            d = line.distance(spot)
-            if best_d is None or d < best_d:
-                best, best_d = line, d
-        coords = list(best.coords)
-        at = best.project(nearest_points(best, spot)[0])
-        # The segment the nearest point falls on.
-        run = 0.0
-        for (x1, y1), (x2, y2) in zip(coords, coords[1:]):
-            seg = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
-            if run + seg >= at or (x2, y2) == coords[-1]:
-                break
-            run += seg
-        cross = (x2 - x1) * (spot.y - y1) - (y2 - y1) * (spot.x - x1)
-        # Tile y grows southward, which mirrors the plane: "right of the line"
-        # has a positive cross product here, where it is negative on a map.
-        return cross > 0
-
-    return [f.intersection(frame) for f in faces
-            if f.intersection(frame).area > 1 and seaward(f)]
 
 
 def _real_kerbs(sides):
