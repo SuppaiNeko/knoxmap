@@ -33,7 +33,7 @@ from generator import osm, places, renderer, sketch
 from knoxbuild import mapstate
 from knoxbuild.settings import PRESETS, Settings
 
-from web import common, jobs
+from web import common, jobs, updates
 from web.checks import (BASE_BYTES, BIG_AREA_KM2, BIG_LANDMARK_KM2,
                         BIG_TILES_PER_SIDE, BUILD_BASE_BYTES,
                         BUILD_BYTES_PER_TILE, BYTES_PER_TILE,
@@ -135,58 +135,6 @@ def api_report_save():
     log.info("problem report saved: %s", path.name)
     knoxlog.open_folder(path)
     return jsonify({"name": path.name, "path": str(path)})
-
-
-@app.route("/api/update")
-def api_update():
-    """Whether a newer KnoxMap is downloading or ready (updater.py)."""
-    import updater
-    return jsonify(updater.status())
-
-
-@app.route("/api/update/check", methods=["POST"])
-def api_update_check():
-    import updater
-    threading.Thread(target=updater.check, name="update-check", daemon=True).start()
-    return jsonify(updater.status())
-
-
-@app.route("/api/versions")
-def api_versions():
-    """The KnoxMap releases on GitHub, for the version menu."""
-    import updater
-    try:
-        return jsonify(updater.releases())
-    except Exception as exc:  # noqa: BLE001 - offline or rate-limited
-        return failed(f"Could not reach GitHub for the list of versions: {exc}", 502, exc)
-
-
-@app.route("/api/versions/install", methods=["POST"])
-def api_versions_install():
-    """Download the version chosen in the menu, to go in on restart."""
-    import updater
-    version = str((request.get_json(silent=True) or {}).get("version", "")).strip()
-    if not re.fullmatch(r"\d+(\.\d+){0,3}", version):
-        return failed("Choose a version from the list.", 400)
-    if not updater.managed():
-        return failed("This copy of KnoxMap is a git checkout: switch versions with git.", 400)
-    if updater.status().get("state") in ("checking", "downloading"):
-        return failed("A download is already running; try again in a moment.", 409)
-    log.info("version %s chosen in the window (this is %s)", version, updater.current_version())
-    threading.Thread(target=updater.choose, args=(version,), name="choose-version",
-                     daemon=True).start()
-    return jsonify({"started": True, "version": version})
-
-
-@app.route("/api/update/restart", methods=["POST"])
-def api_update_restart():
-    import updater
-    if os.environ.get("KNOXMAP_WINDOW") != "1":
-        return failed("Close KnoxMap and open it again to update.", 400)
-    if updater.status().get("state") != "ready":
-        return failed("No update is ready yet.", 409)
-    updater.restart()
-    return jsonify({"restarting": True})
 
 
 # ---- the window in another language ---------------------------------------------
@@ -2328,6 +2276,7 @@ def download_all(map_name: str):
 
 # ---- the routes: one blueprint per area, in web/ ----------------------------------
 app.register_blueprint(jobs.bp)
+app.register_blueprint(updates.bp)
 
 
 if __name__ == "__main__":
