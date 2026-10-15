@@ -3373,8 +3373,8 @@ def check_box_any(check) -> None:
     summed-area table out of memory; it must still answer the same."""
     import numpy as np
 
-    from generator.renderer import _box_any
-    import generator.renderer as renderer
+    from generator.rendering import vegetation
+    from generator.rendering.vegetation import _box_any
 
     def whole_map(mask, radius):
         h, w = mask.shape
@@ -3385,16 +3385,16 @@ def check_box_any(check) -> None:
                 - ii[k:k + h, 0:w] + ii[0:h, 0:w]) > 0
 
     rng = np.random.default_rng(3)
-    was = renderer.BOX_STRIP_ROWS
+    was = vegetation.BOX_STRIP_ROWS
     same = True
     try:
         for shape, radius, strip in (((300, 200), 3, 64), ((97, 61), 0, 7),
                                      ((512, 300), 12, 512), ((200, 200), 1, 3)):
-            renderer.BOX_STRIP_ROWS = strip
+            vegetation.BOX_STRIP_ROWS = strip
             mask = rng.random(shape) < 0.02
             same = same and np.array_equal(_box_any(mask, radius), whole_map(mask, radius))
     finally:
-        renderer.BOX_STRIP_ROWS = was
+        vegetation.BOX_STRIP_ROWS = was
     check(same, "the gardens' reach test gives the same answer strip by strip")
 
 
