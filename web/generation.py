@@ -378,6 +378,8 @@ def api_pictures_status():
         return jsonify(dict(_PICTURES.get(map_dir.name, {"state": "idle", "files": []})))
 
 
+# ---- the rest of the pipeline, so the whole thing lives in one window ----
+
 @bp.route("/api/buildings", methods=["POST"])
 def api_buildings():
     """Run knoxbuild over a generated map."""
