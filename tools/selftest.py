@@ -2969,9 +2969,10 @@ def check_throttle(check) -> None:
 def check_saved_areas(check, work: str) -> None:
     """Saved areas: kept by name, checked on the way in, gone when deleted."""
     import app as knoxapp
+    from web import presets as webpresets
 
-    was = knoxapp.PRESETS_FILE
-    knoxapp.PRESETS_FILE = Path(work) / "presets_test.json"
+    was = webpresets.PRESETS_FILE
+    webpresets.PRESETS_FILE = Path(work) / "presets_test.json"
     try:
         client = knoxapp.app.test_client()
         body = {"name": "Old town", "south": 40.0, "west": 20.0, "north": 40.01,
@@ -3009,7 +3010,7 @@ def check_saved_areas(check, work: str) -> None:
         check(client.delete("/api/presets/Old%20town").status_code == 404,
               "and deleting it again says it is not there")
     finally:
-        knoxapp.PRESETS_FILE = was
+        webpresets.PRESETS_FILE = was
 
 
 def check_portable_presets(check, work: str) -> None:
