@@ -33,7 +33,7 @@ from generator import osm, places, renderer, sketch
 from knoxbuild import mapstate
 from knoxbuild.settings import PRESETS, Settings
 
-from web import common
+from web import common, jobs
 from web.checks import (BASE_BYTES, BIG_AREA_KM2, BIG_LANDMARK_KM2,
                         BIG_TILES_PER_SIDE, BUILD_BASE_BYTES,
                         BUILD_BYTES_PER_TILE, BYTES_PER_TILE,
@@ -44,6 +44,8 @@ from web.checks import (BASE_BYTES, BIG_AREA_KM2, BIG_LANDMARK_KM2,
 from web.common import (BASE_DIR, SAFE_NAME, _bbox_area_km2, _cos_lat,
                         _json_body, _map_dir, _request_context, _worlded_exe,
                         failed, log)
+from web.jobs import (_COMPILE, _PROGRESS_LOCK, _done_stopping, _set_progress,
+                      _stopped, _stopper)
 from web.mapfiles import (_load_design, _load_edits, _load_settings,
                           _load_sketch, _osm_cache_for, _save_design,
                           _save_edits, _save_settings, _save_sketch)
@@ -274,79 +276,6 @@ def _only_local():
 # Source cells per side handed to one WorldEd process. 4x4 keeps its peak
 # memory around a gigabyte; larger batches are faster per cell but climb.
 COMPILE_BATCH = 4
-
-# Big maps take minutes, so generation reports where it has got to and the page
-# polls /api/progress. Keyed by map name; the generate call owns its entry.
-_PROGRESS: dict[str, dict] = {}
-_COMPILE: dict[str, dict] = {}
-_PROGRESS_LOCK = threading.Lock()
-
-
-def _set_progress(map_name: str, **fields) -> None:
-    with _PROGRESS_LOCK:
-        _PROGRESS.setdefault(map_name, {}).update(fields)
-    # Discord Rich Presence, if the player asked for it. It is a set on a
-    # background thread and nothing here waits on it: knoxpresence swallows
-    # its own errors so a Discord that is closed, restarting or not installed
-    # cannot interrupt a map halfway through.
-    if "stage" in fields:
-        try:
-            import knoxpresence
-            knoxpresence.stage(str(fields["stage"]))
-        except Exception:  # noqa: BLE001 - presence is never worth a failure
-            pass
-
-
-# Maps the window has asked to stop. A long job looks at this between the
-# pieces of work it can be interrupted between (knoxstop.py); the name comes
-# off the list when the job it stopped notices, so the next run is not
-# stopped before it starts.
-_STOPPING: set[str] = set()
-
-
-def _stopper(map_name: str):
-    """A callable the long jobs poll: True once the window has asked."""
-    return lambda: map_name in _STOPPING
-
-
-def _done_stopping(map_name: str) -> None:
-    _STOPPING.discard(map_name)
-
-
-def _stopped(map_name: str, step: str):
-    """The reply for a job the window stopped: not an error, and the map's
-    area and settings are untouched."""
-    _done_stopping(map_name)
-    log.info("stop %s: %s stopped", map_name, step)
-    with _PROGRESS_LOCK:
-        _PROGRESS.setdefault(map_name, {})["stage"] = "stopped"
-    return jsonify({"stopped": True, "step": step, "mapName": map_name}), 409
-
-
-@app.route("/api/stop", methods=["POST"])
-def api_stop():
-    """Stop making this map, and leave everything else as it is.
-
-    The drawn area, the settings and whatever has already been written stay
-    where they are: pressing the button again starts the same map over. Used
-    to mean closing the window, which threw the drawn rectangle away with it.
-    """
-    name = str((_json_body() or {}).get("mapName", "")).strip()
-    if not name:
-        return failed("Which map?", 400)
-    _STOPPING.add(name)
-    log.info("stop %s: asked by the window", name)
-    with _PROGRESS_LOCK:
-        _PROGRESS.setdefault(name, {})["stage"] = "stopping"
-        if _COMPILE.get(name, {}).get("state") == "running":
-            _COMPILE[name] = {**_COMPILE[name], "state": "stopping"}
-    return jsonify({"stopping": True, "mapName": name})
-
-
-@app.route("/api/progress")
-def api_progress():
-    with _PROGRESS_LOCK:
-        return jsonify(_PROGRESS.get(request.args.get("map", ""), {}))
 
 
 @app.route("/")
@@ -2395,6 +2324,10 @@ def download_all(map_name: str):
     buf.seek(0)
     return send_file(buf, mimetype="application/zip", as_attachment=True,
                      download_name=f"{safe}.zip")
+
+
+# ---- the routes: one blueprint per area, in web/ ----------------------------------
+app.register_blueprint(jobs.bp)
 
 
 if __name__ == "__main__":
