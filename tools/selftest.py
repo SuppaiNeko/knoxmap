@@ -2320,6 +2320,7 @@ def check_no_size_wall(check, work: str) -> None:
     every size gate there is - which is the thing being tested.
     """
     import app as knoxapp
+    from web import common as webcommon
 
     class Reached(RuntimeError):
         """Raised where the download would start."""
@@ -2329,10 +2330,10 @@ def check_no_size_wall(check, work: str) -> None:
 
     client = knoxapp.app.test_client()
     was_fetch = knoxapp.osm.fetch_features_tiled
-    was_out = knoxapp.OUTPUT_DIR
+    was_out = webcommon.OUTPUT_DIR
     knoxapp.osm.fetch_features_tiled = no_download
-    knoxapp.OUTPUT_DIR = Path(work) / "huge-maps"
-    knoxapp.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    webcommon.OUTPUT_DIR = Path(work) / "huge-maps"
+    webcommon.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         # Past every old limit but the one WorldEd has: 25 km x 10 km at a metre a
         # tile, 25,000 tiles a side and 250 million tiles. (A map past 268
@@ -2354,7 +2355,7 @@ def check_no_size_wall(check, work: str) -> None:
             check(True, "but a scale of zero, a negative one or a silly one is not")
     finally:
         knoxapp.osm.fetch_features_tiled = was_fetch
-        knoxapp.OUTPUT_DIR = was_out
+        webcommon.OUTPUT_DIR = was_out
 
     check(knoxapp.BIG_AREA_KM2 > 0 and knoxapp.BIG_TILES_PER_SIDE > 0
           and knoxapp.BIG_LANDMARK_KM2 > 0,
@@ -2465,14 +2466,15 @@ def check_odd_requests(check, work: str) -> None:
     """Requests with the wrong kind of value in them are answered, not crashed on,
     and a download that fails leaves no folder behind."""
     import app as knoxapp
+    from web import common as webcommon
 
     def no_download(*_a, **_k):
         raise RuntimeError("the network is off in this test")
 
-    was_fetch, was_out = knoxapp.osm.fetch_features_tiled, knoxapp.OUTPUT_DIR
+    was_fetch, was_out = knoxapp.osm.fetch_features_tiled, webcommon.OUTPUT_DIR
     knoxapp.osm.fetch_features_tiled = no_download
-    knoxapp.OUTPUT_DIR = Path(work) / "odd_output"
-    knoxapp.OUTPUT_DIR.mkdir()
+    webcommon.OUTPUT_DIR = Path(work) / "odd_output"
+    webcommon.OUTPUT_DIR.mkdir()
     try:
         client = knoxapp.app.test_client()
         box = {"south": 40.0, "west": 20.0, "north": 40.01, "east": 20.01}
@@ -2480,14 +2482,14 @@ def check_odd_requests(check, work: str) -> None:
                     for what in (7, ["x"], {"a": 1}, True)]
         check(set(statuses) == {502},
               f"a map name that is not text is replaced by one, not a crash ({statuses})")
-        check(not any(knoxapp.OUTPUT_DIR.iterdir()),
+        check(not any(webcommon.OUTPUT_DIR.iterdir()),
               "and a download that fails leaves no folder in output/")
         check(all(client.post("/api/client-error", json=v).status_code == 200
                   for v in ("x", 5, [], None)),
               "the page's error report is taken whatever it sends")
     finally:
         knoxapp.osm.fetch_features_tiled = was_fetch
-        knoxapp.OUTPUT_DIR = was_out
+        webcommon.OUTPUT_DIR = was_out
 
 
 def check_osm_parse_tolerant(check) -> None:
@@ -3965,6 +3967,7 @@ def main(argv: list[str]) -> int:
         print("app page")
 
         import app as knoxmap_app
+        from web import common as webcommon
         client = knoxmap_app.app.test_client()
         page = client.get("/")
         assets = re.findall(r'(?:href|src)="(/static/[^"]+)"', page.get_data(as_text=True))
@@ -4023,9 +4026,9 @@ def main(argv: list[str]) -> int:
 
         revealed = []
         was_open = _kl.open_folder
-        was_output = knoxmap_app.OUTPUT_DIR
+        was_output = webcommon.OUTPUT_DIR
         _kl.open_folder = lambda p=None: revealed.append(str(p)) or True
-        knoxmap_app.OUTPUT_DIR = Path(out).parent      # where this map really is
+        webcommon.OUTPUT_DIR = Path(out).parent      # where this map really is
         try:
             saved = client.post("/api/save", json={"mapName": "selftest", "name": "zip"}).get_json()
             one = client.post("/api/save", json={"mapName": "selftest",
@@ -4034,7 +4037,7 @@ def main(argv: list[str]) -> int:
                                                     "name": "../../secrets.txt"})
         finally:
             _kl.open_folder = was_open
-            knoxmap_app.OUTPUT_DIR = was_output
+            webcommon.OUTPUT_DIR = was_output
         zip_path = Path(out) / "selftest.zip"
         check(saved and zip_path.exists() and _zip.ZipFile(zip_path).namelist()
               and one and one.get("name") == "selftest_preview.png"

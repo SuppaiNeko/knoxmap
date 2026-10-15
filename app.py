@@ -8,6 +8,7 @@ Run:
 
 Then open http://127.0.0.1:5000/ in a browser.
 """
+# <imports>
 from __future__ import annotations
 
 import io
@@ -32,15 +33,18 @@ from generator import osm, places, renderer, sketch
 from knoxbuild import mapstate
 from knoxbuild.settings import PRESETS, Settings
 
+from web import common
+from web.common import (BASE_DIR, SAFE_NAME, _bbox_area_km2, _cos_lat,
+                        _json_body, _map_dir, _request_context, _worlded_exe,
+                        failed, log)
+# </imports>
+
+
 # Builds print place names in any script; a console on a legacy code page
 # would raise mid-request on the first one it cannot show.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(errors="replace")
-
-BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "output"
-OUTPUT_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -50,31 +54,6 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 # Such a request carries the attacker's hostname, so anything not addressed to
 # localhost is refused before it reaches a route.
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
-
-
-log = knoxlog.setup("app")
-
-
-def _request_context() -> dict:
-    """What the page asked for, for the log: the map, the area and the
-    settings, never more than a few hundred characters."""
-    body = request.get_json(silent=True) if request.is_json else None
-    if not isinstance(body, dict):
-        return {}
-    keep = ("mapName", "south", "west", "north", "east", "metersPerTile", "title", "modId")
-    ctx = {k: body[k] for k in keep if k in body}
-    if isinstance(body.get("settings"), dict):
-        ctx["settings"] = body["settings"]
-    if body.get("shape"):
-        ctx["shape"] = "drawn"
-    return ctx
-
-
-def failed(message: str, status: int = 500, exc: BaseException | None = None):
-    """An error reply the page shows, logged with an id the user can quote."""
-    eid = knoxlog.record(exc, f"{request.method} {request.path} -> {status}: {message}",
-                         **_request_context())
-    return jsonify({"error": message, "errorId": eid}), status
 
 
 @app.errorhandler(Exception)
@@ -129,7 +108,7 @@ def api_report():
     """A zip of the logs and a description of the PC, for #bug-reports."""
     log.info("problem report downloaded")
     stamp = time.strftime("%Y%m%d-%H%M")
-    return send_file(io.BytesIO(knoxlog.report_zip(OUTPUT_DIR)), mimetype="application/zip",
+    return send_file(io.BytesIO(knoxlog.report_zip(common.OUTPUT_DIR)), mimetype="application/zip",
                      as_attachment=True, download_name=f"KnoxMap-report-{stamp}.zip")
 
 
@@ -140,7 +119,7 @@ def api_report_save():
     stamp = time.strftime("%Y%m%d-%H%M%S")
     path = knoxlog.LOG_DIR / f"KnoxMap-report-{stamp}.zip"
     knoxlog.LOG_DIR.mkdir(exist_ok=True)
-    path.write_bytes(knoxlog.report_zip(OUTPUT_DIR))
+    path.write_bytes(knoxlog.report_zip(common.OUTPUT_DIR))
     log.info("problem report saved: %s", path.name)
     knoxlog.open_folder(path)
     return jsonify({"name": path.name, "path": str(path)})
@@ -324,7 +303,6 @@ USUAL_METERS_PER_TILE = (1.0, 8.0)
 # the first thing to get slow.
 BIG_LANDMARK_KM2 = 40.0
 
-SAFE_NAME = re.compile(r"[^A-Za-z0-9_-]+")
 
 # Source cells per side handed to one WorldEd process. 4x4 keeps its peak
 # memory around a gigabyte; larger batches are faster per cell but climb.
@@ -674,14 +652,6 @@ def _wrap_lon(lon: float) -> float:
     return (lon + 180.0) % 360.0 - 180.0
 
 
-def _json_body() -> dict:
-    """The request's JSON object, or {} for anything else - a bare number, a
-    list, broken JSON. Endpoints then report what is missing instead of
-    failing with a server error."""
-    data = request.get_json(silent=True)
-    return data if isinstance(data, dict) else {}
-
-
 def _normalise_bbox(south: float, west: float, north: float,
                     east: float) -> tuple[tuple[float, float, float, float],
                                           str | None]:
@@ -856,7 +826,7 @@ def generate():
     t0 = time.time()
     log.info("generate %s: %.5f,%.5f,%.5f,%.5f at %s m/tile, %.2f km2", map_name,
              south, west, north, east, meters_per_tile, area_km2)
-    map_dir = OUTPUT_DIR / map_name
+    map_dir = common.OUTPUT_DIR / map_name
     # A folder this request makes is taken away again if the download fails: it
     # holds nothing but the settings, and every failed attempt left one behind.
     made_here = not map_dir.exists()
@@ -1109,7 +1079,7 @@ def api_maps():
     """Every map in output/, newest first, and whether an older KnoxMap made
     it - so one can be opened again instead of drawn from scratch."""
     maps = []
-    for entry in OUTPUT_DIR.iterdir():
+    for entry in common.OUTPUT_DIR.iterdir():
         if not entry.is_dir() or not (entry / f"{entry.name}_info.json").exists():
             continue
         maps.append(_map_summary(entry))
@@ -1131,7 +1101,7 @@ def api_map(map_name: str):
 
 @app.route("/output/<path:relpath>")
 def serve_output(relpath: str):
-    return send_from_directory(OUTPUT_DIR, relpath)
+    return send_from_directory(common.OUTPUT_DIR, relpath)
 
 
 # Pictures of a finished map: drawn from the compiled cells the game itself
@@ -1186,27 +1156,6 @@ def api_pictures_status():
         return jsonify({"error": "Unknown map."}), 404
     with _PROGRESS_LOCK:
         return jsonify(dict(_PICTURES.get(map_dir.name, {"state": "idle", "files": []})))
-
-
-# ---- the rest of the pipeline, so the whole thing lives in one window ----
-
-def _worlded_exe(cli: bool = False) -> Path | None:
-    """Find PZWorldEd. `cli` prefers the patched build with --generate-map."""
-    import knoxpaths
-
-    return knoxpaths.worlded_cli() if cli else knoxpaths.worlded_gui()
-
-
-def _map_dir(map_name: str) -> Path | None:
-    # A page sends null here before any map exists; that is "no such map",
-    # not a crash.
-    if not isinstance(map_name, str) or not map_name.strip():
-        return None
-    safe = SAFE_NAME.sub("_", map_name)
-    d = (OUTPUT_DIR / safe).resolve()
-    if not str(d).startswith(str(OUTPUT_DIR.resolve())) or not d.is_dir():
-        return None
-    return d
 
 
 @app.route("/api/buildings", methods=["POST"])
@@ -2201,7 +2150,7 @@ def _resources() -> dict:
                    buildKm2=max(0, round((usable - BUILD_BASE_BYTES)
                                          / BUILD_BYTES_PER_TILE / 1e6)))
     try:
-        out["diskFreeGB"] = round(shutil.disk_usage(OUTPUT_DIR).free / 1e9, 1)
+        out["diskFreeGB"] = round(shutil.disk_usage(common.OUTPUT_DIR).free / 1e9, 1)
     except OSError:
         pass
     return out
@@ -2667,18 +2616,6 @@ def api_workshop_check():
     return jsonify({"results": results, **workshop_check.summary(results)})
 
 
-def _bbox_area_km2(south: float, west: float, north: float, east: float) -> float:
-    lat_mid = (south + north) / 2
-    h_km = (north - south) * 111.32
-    w_km = (east - west) * 111.32 * _cos_lat(lat_mid)
-    return h_km * w_km
-
-
-def _cos_lat(lat_deg: float) -> float:
-    import math
-    return math.cos(math.radians(lat_deg))
-
-
 def _write_readme(map_dir: Path, map_name: str, result: renderer.RenderResult) -> None:
     text = f"""Project Zomboid map: {map_name}
 Generated by KnoxMap.
@@ -2774,8 +2711,8 @@ def download_all(map_name: str):
     placement CSV that `python -m knoxbuild` writes into the same folder.
     """
     safe = SAFE_NAME.sub("_", map_name)
-    map_dir = (OUTPUT_DIR / safe).resolve()
-    if not str(map_dir).startswith(str(OUTPUT_DIR.resolve())):
+    map_dir = (common.OUTPUT_DIR / safe).resolve()
+    if not str(map_dir).startswith(str(common.OUTPUT_DIR.resolve())):
         return jsonify({"error": "Bad map name."}), 400
     if not map_dir.is_dir():
         return jsonify({"error": f"No output for {safe!r}."}), 404
