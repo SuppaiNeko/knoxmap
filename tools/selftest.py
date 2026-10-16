@@ -2339,7 +2339,13 @@ def check_no_size_wall(check, work: str) -> None:
         # million is refused: see check_worlded_size.)
         huge = {"south": 51.2, "west": -0.6, "north": 51.29, "east": -0.24,
                 "metersPerTile": 1, "mapName": "selftest-huge"}
-        said = client.post("/api/generate", json=huge)
+        import knoxlog as _kl
+        _mem = _kl.memory_status
+        _kl.memory_status = lambda: (2 ** 40, 2 ** 40, 2 ** 40)  # not the host's RAM
+        try:
+            said = client.post("/api/generate", json=huge)
+        finally:
+            _kl.memory_status = _mem
         body = (said.get_json() or {}).get("error", "")
         check("got as far as the download" in body,
               f"a map past every old limit but WorldEd's is built, not refused "
