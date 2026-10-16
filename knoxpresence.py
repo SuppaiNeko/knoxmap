@@ -99,8 +99,10 @@ def large_image() -> str:
         r.raise_for_status()
         assets = [a for a in r.json() if a.get("id")]
         if not assets:
-            log.warning("discord: the application has no art assets uploaded - "
-                        "the logo cannot show until one is")
+            if not _asset_cache.get("warned"):
+                _asset_cache["warned"] = True  # once per run, not once an hour
+                log.warning("discord: the application has no art assets uploaded - "
+                            "the logo cannot show until one is")
         else:
             pick = next((a for a in assets
                          if (a.get("name") or "").lower() == ASSET_PREFERRED), assets[0])

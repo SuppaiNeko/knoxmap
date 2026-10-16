@@ -76,6 +76,16 @@
   the drawing centred in that, so its streets stop short of the border. The
   join panel says so while there is still time to press Fit to cells.
 
+- **A map the PC can never hold is refused** (`app.py`). A map that needs more
+  memory than the PC has installed is turned away with the size it needs, not
+  started and left to fill the disk with swap. One that only does not fit in
+  what is free right now is still allowed, with the warning as before.
+- **Overpass gets a fourth pass** (`generator/osm.py`). Tiles that were turned
+  away are asked for once more after a further wait (45, 90, then 180 s).
+- **Quieter log** (`app.py`, `knoxpresence.py`). A page error report with no
+  message and no stack is not written down, and the Discord "no art assets"
+  warning is logged once a run instead of every hour.
+
 ## 1.7.4
 
 - **The drawing board joins the map next door** (`knoxbuild/joins.py`, new;

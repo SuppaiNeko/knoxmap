@@ -118,6 +118,8 @@ def _log_refusals(response):
 def api_client_error():
     """Errors in the page itself, sent by the script in static/js/app.js."""
     data = _json_body()
+    if not (str(data.get("message") or "").strip() or str(data.get("stack") or "").strip()):
+        return jsonify({"errorId": None})  # nothing to report, nothing to log
     eid = knoxlog.error_id()
     log.error("%s page error: %s\n  at %s\n%s", eid,
               str(data.get("message", ""))[:500], str(data.get("where", ""))[:300],
@@ -766,6 +768,24 @@ def _too_big_for_memory(tiles_w: float, tiles_h: float,
     return None
 
 
+def _beyond_this_pc(tiles_w: float, tiles_h: float) -> str | None:
+    """Why this map cannot be made on this PC however much is closed, or None.
+
+    A map that needs more memory than the PC has installed cannot work, and
+    trying it only fills the disk with swap before it fails. A map that merely
+    does not fit in what is free now is still allowed through (a warning)."""
+    status = knoxlog.memory_status()
+    if not status:
+        return None
+    total = status[0]
+    needed = tiles_w * tiles_h * BYTES_PER_TILE + BASE_BYTES
+    if total and needed > total:
+        return (f"This map needs about {needed / 1e9:.0f} GB of memory and this PC has "
+                f"{total / 1e9:.0f} GB, so it cannot be made here. Pick a smaller area, "
+                f"or a larger scale (metres per tile).")
+    return None
+
+
 @app.route("/api/generate", methods=["POST"])
 def generate():
     data = _json_body()
@@ -850,6 +870,9 @@ def generate():
     tight = _too_big_for_memory(approx_w, approx_h)
     if tight:
         heavy.append(tight)
+    impossible = _beyond_this_pc(approx_w, approx_h)
+    if impossible:
+        return jsonify({"error": impossible}), 400
     if heavy:
         log.warning("generate %s: going ahead with a heavy map - %s",
                     map_name, "; ".join(heavy))

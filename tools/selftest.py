@@ -2339,7 +2339,13 @@ def check_no_size_wall(check, work: str) -> None:
         # million is refused: see check_worlded_size.)
         huge = {"south": 51.2, "west": -0.6, "north": 51.29, "east": -0.24,
                 "metersPerTile": 1, "mapName": "selftest-huge"}
-        said = client.post("/api/generate", json=huge)
+        import knoxlog as _kl
+        _mem = _kl.memory_status
+        _kl.memory_status = lambda: (2 ** 40, 2 ** 40, 2 ** 40)  # not the host's RAM
+        try:
+            said = client.post("/api/generate", json=huge)
+        finally:
+            _kl.memory_status = _mem
         body = (said.get_json() or {}).get("error", "")
         check("got as far as the download" in body,
               f"a map past every old limit but WorldEd's is built, not refused "
@@ -2485,6 +2491,20 @@ def check_odd_requests(check, work: str) -> None:
         check(all(client.post("/api/client-error", json=v).status_code == 200
                   for v in ("x", 5, [], None)),
               "the page's error report is taken whatever it sends")
+        import knoxlog
+        before = open(knoxlog.MAIN_LOG, encoding="utf-8").read().count("page error")
+        client.post("/api/client-error", json={})
+        check(open(knoxlog.MAIN_LOG, encoding="utf-8").read().count("page error") == before,
+              "an empty page error report is not written to the log")
+        was_mem = knoxlog.memory_status
+        try:
+            knoxlog.memory_status = lambda: (8 * 2 ** 30, 4 * 2 ** 30, 2 ** 40)
+            r = client.post("/api/generate", json={"south": 10.0, "west": 10.0,
+                                                   "north": 10.1, "east": 10.1, "mapName": "x"})
+            check(r.status_code == 400 and "cannot be made here" in r.get_json()["error"],
+                  f"a map bigger than the PC's whole memory is refused ({r.status_code} {r.get_json()})")
+        finally:
+            knoxlog.memory_status = was_mem
     finally:
         knoxapp.osm.fetch_features_tiled = was_fetch
         knoxapp.OUTPUT_DIR = was_out
