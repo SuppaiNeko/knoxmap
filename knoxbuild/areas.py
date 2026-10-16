@@ -132,6 +132,7 @@ class AreaIndex:
         for shape, props in self._items:
             if props.get("category") not in categories:
                 continue
+            # An outline mended with buffer(0) can be several polygons.
             for part in parts(shape):
                 ring = [(float(x), float(y)) for x, y in part.exterior.coords]
                 if len(ring) >= 3:
