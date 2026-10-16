@@ -102,9 +102,13 @@ class AreaIndex:
         for shape, props in self._items:
             if props.get("category") not in categories:
                 continue
-            ring = [(float(x), float(y)) for x, y in shape.exterior.coords]
-            if len(ring) >= 3:
-                pen.polygon(ring, fill=1)
+            # buffer(0) on a self-touching outline gives a MultiPolygon.
+            for part in getattr(shape, "geoms", (shape,)):
+                if not hasattr(part, "exterior"):
+                    continue
+                ring = [(float(x), float(y)) for x, y in part.exterior.coords]
+                if len(ring) >= 3:
+                    pen.polygon(ring, fill=1)
         return np.asarray(sheet, dtype=bool)
 
     def category_at(self, x: float, y: float) -> str | None:
