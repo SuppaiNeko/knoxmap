@@ -29,7 +29,7 @@ HEADERS = {
 # Nominatim's public server is shared and has a usage policy every client must
 # follow: https://operations.osmfoundation.org/policies/nominatim/
 # One request a second (see _throttle), a real User-Agent (HEADERS), results
-# cached (app.py), no autocomplete (the page searches only on Enter), no bulk use.
+# cached (web/geo.py), no autocomplete (the page searches only on Enter), no bulk use.
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 # The same instances, in the same order, as the map download (generator/osm.py,
 # configurable in knoxmap_config.json).

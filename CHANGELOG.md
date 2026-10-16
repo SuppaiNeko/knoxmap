@@ -86,6 +86,14 @@
   message and no stack is not written down, and the Discord "no art assets"
   warning is logged once a run instead of every hour.
 
+- **Inside: the window's code and the renderer are in pieces now** (`web/`,
+  `generator/rendering/`, both new). `app.py` was 2,796 lines of routes and
+  `renderer.py` 2,430 lines of drawing passes; the routes are blueprints in
+  `web/` and the passes are modules in `generator/rendering/`, with both old
+  files keeping their names and re-exporting everything that moved. Nothing a
+  map is made of changed: the same 65 routes, and the three regression towns
+  compile byte for byte as before.
+
 ## 1.7.4
 
 - **The drawing board joins the map next door** (`knoxbuild/joins.py`, new;

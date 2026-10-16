@@ -343,7 +343,7 @@ def _utm_extent(south: float, west: float, north: float, east: float):
     """How wide and tall the renderer will measure this box, in metres.
 
     The renderer projects the four corners into the UTM zone the box sits in
-    and takes the spread (generator/renderer.py, Projector.build). Asking the
+    and takes the spread (generator/rendering/projection.py, Projector.build). Asking the
     same question the same way is the only way to hand it a sheet that comes
     out the size it was drawn at.
     """

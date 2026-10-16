@@ -5,6 +5,7 @@ from PIL import Image
 
 from generator import pz_colors as C
 from generator import renderer
+from generator.rendering import furniture
 
 
 class RoadFurniturePlacement(unittest.TestCase):
@@ -24,7 +25,7 @@ class RoadFurniturePlacement(unittest.TestCase):
         for mod_tiles, prop in ((True, "speed"), (False, "lamp")):
             with self.subTest(prop=prop):
                 vegetation, ground = self.make_road(C.DARK_ASPHALT)
-                with mock.patch.object(renderer, "_mod_tiles_ready", return_value=mod_tiles):
+                with mock.patch.object(furniture, "_mod_tiles_ready", return_value=mod_tiles):
                     renderer._paint_street_furniture(vegetation, ground)
                 blocked_color = (C.SPEED_SIGNS[(25, "S")] if prop == "speed"
                                  else C.LAMP_W)
@@ -32,7 +33,7 @@ class RoadFurniturePlacement(unittest.TestCase):
 
     def test_lamp_can_use_a_grass_verge(self):
         vegetation, ground = self.make_road(C.DARK_GRASS)
-        with mock.patch.object(renderer, "_mod_tiles_ready", return_value=False):
+        with mock.patch.object(furniture, "_mod_tiles_ready", return_value=False):
             counts = renderer._paint_street_furniture(vegetation, ground)
         self.assertGreater(counts.get("lamp", 0), 0)
 

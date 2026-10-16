@@ -1,0 +1,84 @@
+"""Progress and stop requests for the long jobs: generate, build and compile."""
+from __future__ import annotations
+
+import threading
+
+from flask import Blueprint, jsonify, request
+
+from web.common import _json_body, failed, log
+
+bp = Blueprint("jobs", __name__)
+
+
+# Big maps take minutes, so generation reports where it has got to and the page
+# polls /api/progress. Keyed by map name; the generate call owns its entry.
+_PROGRESS: dict[str, dict] = {}
+_COMPILE: dict[str, dict] = {}
+_PROGRESS_LOCK = threading.Lock()
+
+
+def _set_progress(map_name: str, **fields) -> None:
+    with _PROGRESS_LOCK:
+        _PROGRESS.setdefault(map_name, {}).update(fields)
+    # Discord Rich Presence, if the player asked for it. It is a set on a
+    # background thread and nothing here waits on it: knoxpresence swallows
+    # its own errors so a Discord that is closed, restarting or not installed
+    # cannot interrupt a map halfway through.
+    if "stage" in fields:
+        try:
+            import knoxpresence
+            knoxpresence.stage(str(fields["stage"]))
+        except Exception:  # noqa: BLE001 - presence is never worth a failure
+            pass
+
+
+# Maps the window has asked to stop. A long job looks at this between the
+# pieces of work it can be interrupted between (knoxstop.py); the name comes
+# off the list when the job it stopped notices, so the next run is not
+# stopped before it starts.
+_STOPPING: set[str] = set()
+
+
+def _stopper(map_name: str):
+    """A callable the long jobs poll: True once the window has asked."""
+    return lambda: map_name in _STOPPING
+
+
+def _done_stopping(map_name: str) -> None:
+    _STOPPING.discard(map_name)
+
+
+def _stopped(map_name: str, step: str):
+    """The reply for a job the window stopped: not an error, and the map's
+    area and settings are untouched."""
+    _done_stopping(map_name)
+    log.info("stop %s: %s stopped", map_name, step)
+    with _PROGRESS_LOCK:
+        _PROGRESS.setdefault(map_name, {})["stage"] = "stopped"
+    return jsonify({"stopped": True, "step": step, "mapName": map_name}), 409
+
+
+@bp.route("/api/stop", methods=["POST"])
+def api_stop():
+    """Stop making this map, and leave everything else as it is.
+
+    The drawn area, the settings and whatever has already been written stay
+    where they are: pressing the button again starts the same map over. Used
+    to mean closing the window, which threw the drawn rectangle away with it.
+    """
+    name = str((_json_body() or {}).get("mapName", "")).strip()
+    if not name:
+        return failed("Which map?", 400)
+    _STOPPING.add(name)
+    log.info("stop %s: asked by the window", name)
+    with _PROGRESS_LOCK:
+        _PROGRESS.setdefault(name, {})["stage"] = "stopping"
+        if _COMPILE.get(name, {}).get("state") == "running":
+            _COMPILE[name] = {**_COMPILE[name], "state": "stopping"}
+    return jsonify({"stopping": True, "mapName": name})
+
+
+@bp.route("/api/progress")
+def api_progress():
+    with _PROGRESS_LOCK:
+        return jsonify(_PROGRESS.get(request.args.get("map", ""), {}))

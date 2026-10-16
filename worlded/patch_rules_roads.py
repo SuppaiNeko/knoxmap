@@ -5,7 +5,7 @@ Build 42 ships kerb tiles (street_curbs_01) and painted lines
 laid every kerb and centre line by hand, which is a good part of why its
 streets look finished and generated ones did not. These rules put them on the
 vegetation bitmap, one colour per tile, so the renderer can mark where each
-goes (see generator/renderer.py, _paint_road_details).
+goes (see generator/rendering/roads.py, _paint_road_details).
 
 Which edge each tile sits on was measured from the sheets themselves - where
 its pixels fall inside the floor diamond - not guessed from names. The tile

@@ -1063,7 +1063,7 @@ def _points_of_use(out_dir: str, info: dict, map_name: str, proj) -> dict:
     # As the paper map does: this reads the download, it never fetches one.
     feats = osm.load_cache(cache, wanted, filters=None) or []
     # Points drawn by hand count too. They are kept beside the map rather than
-    # in the download (app.py, _save_sketch), so reading only the cache left a
+    # in the download (web/mapfiles.py, _save_sketch), so reading only the cache left a
     # petrol station somebody placed themselves with no forecourt and no
     # pumps: "0 pumps at 0 stations, 0 canopies and 0 points".
     feats = feats + _drawn_features(out_dir, map_name)
