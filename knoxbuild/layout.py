@@ -4769,6 +4769,47 @@ def _pick_shaft(core: tuple[int, int, int, int], width: int, height: int,
     return options[0][1], options[0][2]
 
 
+def _cut_off_by_the_shaft(plan: Plan) -> None:
+    """Take out any part of the storey the shaft has just walled off.
+
+    Nothing opens into a lift shaft - it is a sealed box - so where the shaft
+    lands in the neck of an L or a T it is a wall across it, and the rooms up
+    the arm are rooms with no door anywhere: their only neighbour is the
+    shaft. One fire station in a few thousand came out with four of them.
+    Those tiles are better off not being part of the storey at all, which is
+    what the arm is from the outside: roof.
+    """
+    shaft_idx = next((i for i, r in enumerate(plan.rooms, 1) if r.is_shaft), 0)
+    if not shaft_idx:
+        return
+    touching: dict[int, set[int]] = {}
+    for (a, b) in _boundary_edges(plan):
+        if shaft_idx in (a, b):
+            continue
+        touching.setdefault(a, set()).add(b)
+        touching.setdefault(b, set()).add(a)
+    rooms = [i for i in range(1, len(plan.rooms) + 1) if i != shaft_idx]
+    if not rooms:
+        return
+    # Out from the biggest room, which is the body of the building.
+    start = max(rooms, key=lambda i: plan.rooms[i - 1].area)
+    seen, stack = {start}, [start]
+    while stack:
+        for nxt in touching.get(stack.pop(), ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    gone = [i for i in rooms if i not in seen]
+    if not gone:
+        return
+    for y in range(plan.height):
+        for x in range(plan.width):
+            if plan.grid[y][x] in gone:
+                plan.grid[y][x] = 0
+    _renumber(plan)
+    _refit(plan)
+
+
 def _carve_shaft(plan: Plan, shaft: tuple[int, int, int, int],
                  door: tuple[int, int, str]) -> None:
     """Paint the elevator shaft over the storey as a sealed room of its own."""
@@ -5401,6 +5442,7 @@ def build_plan(width: int, height: int, commercial: bool = False,
     # A cell is a cell: rooms far bigger than their kind ever is are cut down
     # now the kind is known, before any door is placed on them.
     _split_to_size(plan, rng)
+    _cut_off_by_the_shaft(plan)
 
     _doors(plan, rng)
     if ground:

@@ -31,5 +31,43 @@ class FurnishedRoomWalkability(unittest.TestCase):
         self.assertLess(len(plan.furniture), len(furniture))
 
 
+class NothingIsWalledOffByTheLift(unittest.TestCase):
+    """A lift shaft is sealed, so what it stands across is a wall.
+
+    A tall building with a narrow arm - an L or a T whose neck is a couple of
+    tiles wide - had the shaft land in the neck, and every room up the arm
+    then had nothing beside it but the shaft: no door anywhere, loot nobody
+    could reach. The arm is taken out of that storey instead, which is what
+    it is from the outside: roof.
+    """
+
+    def a_building_with_a_narrow_arm(self):
+        # The shape the layout audit found it on: 16 x 39, a 16-wide body
+        # with a 6-wide arm up the middle - four rooms wide once the arm has
+        # its walls, and the shaft is two of them.
+        mask = [[(y >= 14 or 5 <= x <= 10) for x in range(16)]
+                for y in range(39)]
+        return layout.build_building(16, 39, levels=12, seed=2464, kind="fire",
+                                     mask=mask, commercial=True)
+
+    def test_every_room_has_a_way_in(self):
+        building = self.a_building_with_a_narrow_arm()
+        for level, storey in enumerate(building.storeys):
+            rooms = range(1, len(storey.rooms) + 1)
+            shafts = {i for i in rooms if storey.rooms[i - 1].is_shaft}
+            beside = {}
+            for a, b in layout._boundary_edges(storey):
+                if a in shafts or b in shafts:
+                    continue
+                beside.setdefault(a, set()).add(b)
+                beside.setdefault(b, set()).add(a)
+            for i in rooms:
+                if i in shafts:
+                    continue
+                with self.subTest(level=level, room=storey.rooms[i - 1].kind):
+                    self.assertTrue(beside.get(i),
+                                    "nothing beside it but the lift shaft")
+
+
 if __name__ == "__main__":
     unittest.main()

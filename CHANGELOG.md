@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **The lift could wall off part of a floor** (`knoxbuild/layout.py`). A lift
+  shaft is a sealed box, so what it stands across is a wall. In a tall
+  building with a narrow arm - an L or a T whose neck is a few tiles wide -
+  the shaft landed in the neck, and every room up the arm had nothing beside
+  it but the shaft: no door anywhere, and loot nobody could reach. One
+  building in a few thousand, found by stress-testing the floor-plan
+  generator over 2,500 of them. The arm is taken out of that storey now,
+  which is what it is from the outside: roof.
+
 ## 1.7.6
 
 - **A town with a works in it would not build** (`knoxbuild/areas.py`,
