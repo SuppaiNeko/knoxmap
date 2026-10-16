@@ -27,6 +27,7 @@ from shapely.geometry import Polygon
 
 from generator.renderer import Projector
 
+import knoxfiles
 import knoxstop
 
 from .areas import AreaIndex
@@ -1039,16 +1040,16 @@ def _drawn_features(out_dir: str, map_name: str) -> list:
     # The sheet first, and only the sheet where there is one: building from a
     # sheet writes the drawing it becomes out as well, so reading both counted
     # every drawn thing twice - one petrol station came out as two.
-    for name, convert in ((f"{map_name}_design.json", sketch.design_to_drawn),
-                          (f"{map_name}_sketch.geojson", lambda d: d)):
-        path = os.path.join(out_dir, name)
-        if not os.path.exists(path):
+    # A half-written one of these is said out loud rather than skipped: the
+    # drawing is the whole map on a hand-drawn one, and a build that quietly
+    # left it out handed back empty ground with no word of why.
+    for name, convert, what in (
+            (f"{map_name}_design.json", sketch.design_to_drawn, "the map you drew"),
+            (f"{map_name}_sketch.geojson", lambda d: d, "what you added to the area")):
+        drawn = knoxfiles.read(os.path.join(out_dir, name), what)
+        if drawn is None:
             continue
-        try:
-            with open(path, encoding="utf-8") as f:
-                return sketch.features(convert(json.load(f)))
-        except (OSError, ValueError):
-            continue
+        return sketch.features(convert(drawn))
     return []
 
 
@@ -1381,10 +1382,14 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         return 2
     map_name = names[0][: -len("_info.json")]
 
-    with open(os.path.join(out_dir, f"{map_name}_info.json"), encoding="utf-8") as f:
-        info = json.load(f)
-    with open(os.path.join(out_dir, f"{map_name}_buildings.geojson"), encoding="utf-8") as f:
-        geo = json.load(f)
+    info = knoxfiles.read(os.path.join(out_dir, f"{map_name}_info.json"),
+                          "what the map is", default={})
+    geo = knoxfiles.read(os.path.join(out_dir, f"{map_name}_buildings.geojson"),
+                         "the buildings")
+    if not info or geo is None:
+        print(f"{out_dir} is missing what the map is or its buildings - "
+              f"generate the map again", file=sys.stderr)
+        return 2
 
     bbox = info["bbox"]
     proj = Projector.build(bbox["south"], bbox["west"], bbox["north"],
@@ -1418,9 +1423,8 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
     # a map generated from the command line cannot be reproduced, and the app
     # and the CLI disagree about what a folder was built with.
     try:
-        with open(os.path.join(out_dir, "settings.json"), "w",
-                  encoding="utf-8") as f:
-            json.dump(settings.to_dict(), f, indent=2)
+        knoxfiles.write(os.path.join(out_dir, "settings.json"),
+                        settings.to_dict(), indent=2)
     except OSError:
         pass
 
@@ -1959,14 +1963,14 @@ def build(out_dir: str, seed: int | None = None, min_size: int | None = None,
         spawn_img, pop = build_spawn_map(
             peopled, proj.width, proj.height, info["meters_per_tile"],
             os.path.join(out_dir, f"{map_name}.bmp"), settings, zoning)
-        spawn_img.save(os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"),
+        knoxfiles.save(spawn_img,
+                       os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"),
                        format="BMP")
         save_footprints(os.path.join(out_dir, f"{map_name}_footprints.npz"), peopled)
         pop["official"] = [p for p in official_population(out_dir, map_name)
                            if p.get("inside")][:5]
-        with open(os.path.join(out_dir, f"{map_name}_population.json"), "w",
-                  encoding="utf-8") as f:
-            json.dump(pop, f, indent=2, ensure_ascii=False)
+        knoxfiles.write(os.path.join(out_dir, f"{map_name}_population.json"),
+                        pop, indent=2, ensure_ascii=False)
         return pop
 
     with ThreadPoolExecutor(max_workers=5) as pool:

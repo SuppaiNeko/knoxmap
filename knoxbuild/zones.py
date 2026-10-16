@@ -20,13 +20,14 @@ map is read from the inside out.
 """
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import replace
 
+import knoxfiles
 from shapely import STRtree
 from shapely.geometry import Point, Polygon
 
+from .areas import parts
 from .settings import LIMITS, Settings
 
 # What a zone may say about itself. These are the settings whose answer can
@@ -74,6 +75,17 @@ def overridable() -> list[dict]:
     return out
 
 
+def _listed(value) -> list:
+    """A list of whatever was sent, or nothing. A cleaner never throws: this
+    reads what the window posts and what is on disk, and a number where a
+    list was expected used to come back as a Python TypeError."""
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _table(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def clean(raw) -> list[dict]:
     """Zones from untrusted input: a ring and the settings on it.
 
@@ -85,7 +97,7 @@ def clean(raw) -> list[dict]:
         if not isinstance(item, dict):
             continue
         ring = []
-        for point in item.get("ring") or []:
+        for point in _listed(item.get("ring")):
             try:
                 ring.append((float(point[0]), float(point[1])))
             except (TypeError, ValueError, IndexError):
@@ -94,7 +106,7 @@ def clean(raw) -> list[dict]:
         if len(ring) < 3:
             continue
         values = {}
-        for key, value in (item.get("settings") or {}).items():
+        for key, value in _table(item.get("settings")).items():
             if key not in OVERRIDABLE:
                 continue
             try:
@@ -120,21 +132,16 @@ def clean(raw) -> list[dict]:
 
 
 def load(out_dir: str, map_name: str) -> list[dict]:
+    # A damaged zones file is said rather than swallowed: a build that drops
+    # the zones is a map built to the wrong numbers everywhere they were.
     path = os.path.join(out_dir, f"{map_name}_zones.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            return clean(json.load(f))
-    except (OSError, ValueError):
-        return []
+    return clean(knoxfiles.read(path, "the zones you drew", default=[]))
 
 
 def save(out_dir: str, map_name: str, zones) -> None:
     path = os.path.join(out_dir, f"{map_name}_zones.json")
     os.makedirs(out_dir, exist_ok=True)
-    tmp = path + ".part"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(clean(zones), f)
-    os.replace(tmp, path)
+    knoxfiles.write(path, clean(zones))
 
 
 class Zoning:
@@ -148,6 +155,12 @@ class Zoning:
     def __init__(self, items: list[tuple[Polygon, dict]], settings: Settings):
         self._items = items
         self._tree = STRtree([p for p, _ in items]) if items else None
+        # A zone drawn over itself comes in in pieces; it is still one zone,
+        # and both "the smallest zone here wins" and the order they are
+        # painted in go by the whole of it, not by the piece.
+        self._whole: dict[int, float] = {}
+        for shape, zone in items:
+            self._whole[id(zone)] = self._whole.get(id(zone), 0.0) + shape.area
         self._base = settings
         # The same zone is asked about over and over - every building in a
         # district, every chunk of the spawn map - and a Settings is frozen,
@@ -162,9 +175,12 @@ class Zoning:
             shape = Polygon(ring)
             if not shape.is_valid:
                 shape = shape.buffer(0)
-            if shape.is_empty or shape.area <= 0:
-                continue
-            items.append((shape, zone))
+            # A zone whose outline crosses itself mends into several
+            # polygons, and one of those in the index has no ring to draw.
+            for part in parts(shape):
+                if part.area <= 0:
+                    continue
+                items.append((part, zone))
         return cls(items, settings)
 
     @classmethod
@@ -183,8 +199,9 @@ class Zoning:
         best = None
         for i in self._tree.query(point):
             shape, zone = self._items[int(i)]
-            if shape.contains(point) and (best is None or shape.area < best[0]):
-                best = (shape.area, zone)
+            size = self._whole.get(id(zone), shape.area)
+            if shape.contains(point) and (best is None or size < best[0]):
+                best = (size, zone)
         return best[1] if best else None
 
     def settings_at(self, x: float, y: float) -> Settings:
@@ -230,17 +247,20 @@ class Zoning:
                             dtype=float) for key in keys}
         if not self._items:
             return out
-        for shape, zone in sorted(self._items, key=lambda it: -it[0].area):
+        for shape, zone in sorted(
+                self._items,
+                key=lambda it: -self._whole.get(id(it[1]), it[0].area)):
             values = {k: zone["settings"][k] for k in keys
                       if k in zone["settings"]}
             if not values:
                 continue
             mask = Image.new("1", (gw, gh), 0)
-            ring = [(x / tiles_per_chunk, y / tiles_per_chunk)
-                    for x, y in shape.exterior.coords]
-            if len(ring) < 3:
-                continue
-            ImageDraw.Draw(mask).polygon(ring, fill=1)
+            pen = ImageDraw.Draw(mask)
+            for part in parts(shape):
+                ring = [(x / tiles_per_chunk, y / tiles_per_chunk)
+                        for x, y in part.exterior.coords]
+                if len(ring) >= 3:
+                    pen.polygon(ring, fill=1)
             inside = np.asarray(mask, dtype=bool)
             if not inside.any():
                 continue

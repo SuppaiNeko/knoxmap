@@ -68,7 +68,9 @@ def edges(out_dir: str, map_name: str) -> dict:
     Each road is `{"at": metres along the edge to the middle of it, "width":
     how wide it is in metres, "rank": the road class the renderer painted}`.
     A map built before the road picture was written has no roads here, only
-    its size, which is still enough to draw a sheet that fits beside it.
+    its size, which is still enough to draw a sheet that fits beside it -
+    `roadsKnown` is False for that map, so the window can say which of the
+    two it is looking at.
     """
     info = _info(out_dir, map_name) or {}
     metres = float(info.get("meters_per_tile") or 1.0)
@@ -77,6 +79,10 @@ def edges(out_dir: str, map_name: str) -> dict:
     out = {"name": map_name, "metersPerTile": metres,
            "widthM": round(width * metres, 1), "heightM": round(height * metres, 1),
            "widthTiles": width, "heightTiles": height,
+           # Whether the road picture could be read at all. A map made before
+           # KnoxMap drew one has no roads here however many it has on the
+           # ground, and "no street on that side" would be a lie.
+           "roadsKnown": False,
            "roads": {side: [] for side in SIDES}}
     path = os.path.join(out_dir, f"{map_name}_road_hierarchy.bmp")
     if not width or not height or not os.path.exists(path):
@@ -85,6 +91,7 @@ def edges(out_dir: str, map_name: str) -> dict:
         roads = read_gray(path, crop=(height, width))
     except (OSError, ValueError):
         return out
+    out["roadsKnown"] = True
     lines = {"N": roads[0, :], "S": roads[-1, :],
              "W": roads[:, 0], "E": roads[:, -1]}
     for side, line in lines.items():
@@ -127,9 +134,15 @@ def sheet_joins(out_dir: str, map_name: str, side: str,
             y = sheet_h if side == "S" else 0.0
         else:
             # Down a side: the picture's rows run north to south and the sheet
-            # measures from its bottom, so the distance is flipped.
+            # measures from its bottom, so the distance is flipped. It is
+            # flipped against the sheet's own height, not the map's: the two
+            # are lined up along their northern edge - which is what the
+            # board draws and what placing one beside the other does - so a
+            # road 200 m down the map is 200 m down the sheet whatever the
+            # sheet's height. Measured from the map's height instead, every
+            # street was marked out by the difference between the two.
             x = sheet_w if side == "W" else 0.0
-            y = max(0.0, found["heightM"] - at)
+            y = sheet_h - at
         if 0.0 <= x <= sheet_w and 0.0 <= y <= sheet_h:
             points.append({"x": round(x, 1), "y": round(y, 1),
                            "width": road["width"], "rank": road["rank"],

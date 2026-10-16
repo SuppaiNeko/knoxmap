@@ -11,6 +11,8 @@ import json
 import os
 from xml.sax.saxutils import escape, quoteattr
 
+import knoxfiles
+
 from . import catalog as C
 
 CELL = 300
@@ -20,10 +22,9 @@ def build_structures(out_dir: str, map_name: str, bdir: str) -> tuple[list, dict
     from .world import Placement
 
     path = os.path.join(out_dir, f"{map_name}_structures.json")
-    if not os.path.exists(path):
+    data = knoxfiles.read(path, "the bridges and monuments")
+    if not data:
         return [], {"bridges": 0, "monuments": 0, "tiles": 0}
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
     rows = data.get("tiles") or []
     try:
         with open(os.path.join(out_dir, f"{map_name}_info.json"), encoding="utf-8") as f:

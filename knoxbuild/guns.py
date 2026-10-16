@@ -25,9 +25,10 @@ container is rolled by the game the first time anybody walks in.
 """
 from __future__ import annotations
 
-import json
 import math
 import os
+
+import knoxfiles
 
 # The M16 and enough to fire it. Checked against the game's own scripts:
 # AssaultRifle takes MagazineType Base.556Clip and AmmoType base:bullets_556
@@ -123,6 +124,5 @@ def write(out_dir: str, map_name: str, pick: dict | None,
         "h": int(pick["height"]),
         "items": ITEMS,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2, ensure_ascii=False)
+    knoxfiles.write(path, out, indent=2, ensure_ascii=False)
     return out

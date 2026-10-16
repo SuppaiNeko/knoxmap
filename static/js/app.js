@@ -2871,11 +2871,27 @@ async function boardLoadJoin() {
     if (!res.ok) throw apiError(data, res);
     boardJoin = data;
     boardDrawJoin();
+    // A sheet that is not whole cells is built with empty ground round it and
+    // the drawing centred in that, so every street it marks here ends up
+    // short of the border - the one thing a joined sheet must not do.
+    const padded = !boardCells().exact
+      ? ' This sheet is not whole cells, so it is built with empty ground '
+        + 'round it and its streets stop short of the border: use Fit to '
+        + 'cells before building.'
+      : '';
     const n = (data.joins || []).length;
-    note.textContent = n
+    // A map made before KnoxMap kept a picture of its roads cannot say where
+    // its streets reach the border, which is not the same as having none
+    // there - saying so sent people looking for a street that was drawn.
+    note.textContent = (n
       ? `${n} street${n === 1 ? '' : 's'} of ${name} reach${n === 1 ? 'es' : ''} `
         + 'this sheet. Draw a road to one and it joins up.'
-      : `${name} has no street on that side. The sheet still goes beside it.`;
+      : data.roadsKnown === false
+        ? `${name} was made before KnoxMap kept a picture of a map's roads, so `
+          + 'it cannot say where its streets reach this sheet. Generate that '
+          + 'map again to put them on the edge. The sheet still goes beside it.'
+        : `${name} has no street on that side. The sheet still goes beside it.`)
+      + padded;
   } catch (err) {
     boardJoin = null;
     boardClearJoin();

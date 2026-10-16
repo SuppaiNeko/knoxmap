@@ -19,6 +19,8 @@ import json
 import os
 import time
 
+import knoxfiles
+
 STATE_FILE = "knoxmap_map.json"
 STAGES = ("generate", "build", "compile", "install")
 
@@ -76,8 +78,7 @@ def stamp(map_dir: str, stage: str, version: str | None = None) -> None:
     for later in STAGES[STAGES.index(stage) + 1:]:
         stages.pop(later, None)
     try:
-        with open(_path(map_dir), "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
+        knoxfiles.write(_path(map_dir), state, indent=2)
     except OSError:
         pass          # a map whose stamp cannot be written still works
 

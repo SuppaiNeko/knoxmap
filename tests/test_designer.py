@@ -485,6 +485,23 @@ class TheRoomsOnOffer(unittest.TestCase):
                 self.assertEqual(len(labels), len(set(labels)),
                                  sorted(l for l in labels if labels.count(l) > 1))
 
+    def test_the_lift_shaft_is_not_a_room_to_draw(self):
+        # It has nothing to put in it: it is the machinery the builder fits
+        # beside the stairs, and drawn by hand it is a sealed box. Offered in
+        # the list, drawing one and saving the building ended in "integer
+        # modulo by zero" - asking for one piece out of a list of none.
+        for kind in (None, "house", "police"):
+            with self.subTest(kind=kind):
+                self.assertNotIn("elevator",
+                                 {e["id"] for e in D.room_kinds(kind)})
+
+    def test_and_one_drawn_before_it_was_taken_off_the_list_still_builds(self):
+        design = D.clean({"width": 12, "height": 12, "levels": 1,
+                          "kind": "house",
+                          "rooms": [{"kind": "elevator", "level": 0,
+                                     "x": 2, "y": 2, "w": 4, "h": 4}]})
+        self.assertIn("<building", D.tbx_text(design, "lift"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -143,6 +143,51 @@ class AcrossTheWholeMap(unittest.TestCase):
         self.assertTrue((grid == float(base.spawn_density)).all())
 
 
+class AZoneDrawnOverItself(unittest.TestCase):
+    """An outline that crosses itself is still the ground it covers.
+
+    Mending such an outline gives several polygons back instead of one, and
+    one of those has no ring to paint, so painting the zones into the chunk
+    grid threw 'MultiPolygon object has no attribute exterior'.
+    """
+
+    # Two squares joined by the line between them: tiles 0-40 and 60-100.
+    PINCHED = [[0, 0], [0.04, 0], [0.04, 0.04], [0, 0.04], [0, 0],
+               [0.06, 0.06], [0.1, 0.06], [0.1, 0.1], [0.06, 0.1], [0.06, 0.06]]
+
+    def zoning(self):
+        return zoning({"ring": self.PINCHED, "settings": {"spawn_density": 60}})
+
+    def test_each_part_of_it_is_a_zone_of_its_own(self):
+        z = self.zoning()
+        self.assertEqual(len(z), 2)
+        self.assertEqual(z.settings_at(20, 20).spawn_density, 60)
+        self.assertEqual(z.settings_at(80, 80).spawn_density, 60)
+        self.assertEqual(z.settings_at(50, 50).spawn_density,
+                         Settings().spawn_density)
+
+    def test_a_zone_inside_one_of_its_halves_still_wins(self):
+        # Each half is smaller than the zone nested in it, and "the smallest
+        # zone here wins" would hand the ground to the half that contains it.
+        # What decides is the whole of a zone, however many pieces it is in.
+        z = zoning({"ring": self.PINCHED, "settings": {"spawn_density": 5}},
+                   {"ring": square(0.01, 0.01, 0.035, 0.035),
+                    "settings": {"spawn_density": 60}})
+        self.assertEqual(z.settings_at(20, 20).spawn_density, 60)
+        self.assertEqual(z.settings_at(5, 5).spawn_density, 5)
+        grid = z.chunk_values(("spawn_density",), gw=20, gh=20,
+                              tiles_per_chunk=10)["spawn_density"]
+        self.assertEqual(grid[2, 2], 60.0)      # tiles 20-30: the nested one
+        self.assertEqual(grid[0, 0], 5.0)       # tiles 0-10: the big one
+
+    def test_and_both_are_painted_into_the_chunk_grid(self):
+        grid = self.zoning().chunk_values(("spawn_density",), gw=20, gh=20,
+                                          tiles_per_chunk=10)["spawn_density"]
+        self.assertEqual(grid[1, 1], 60.0)                          # tiles 10-20
+        self.assertEqual(grid[8, 8], 60.0)                          # tiles 80-90
+        self.assertEqual(grid[5, 5], float(Settings().spawn_density))
+
+
 class ForTheWindow(unittest.TestCase):
     def test_every_offered_setting_is_one_a_zone_really_reads(self):
         offered = {s["id"] for s in zones.overridable()}

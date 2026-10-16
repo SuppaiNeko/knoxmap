@@ -10,9 +10,9 @@ house every untagged building used to become.
 """
 from __future__ import annotations
 
-import json
 import os
 
+import knoxfiles
 from shapely import STRtree
 from shapely.geometry import Point, Polygon
 
@@ -35,20 +35,48 @@ KIND_FOR_AREA = {
 OUTBUILDING = 120
 
 
+def parts(shape) -> list[Polygon]:
+    """Every plain polygon in a geometry.
+
+    A ring that touches or crosses itself - a landuse boundary drawn as one
+    way round two yards, or a relation the download cut in half - is mended
+    with buffer(0), and what comes back is then several polygons rather than
+    one. Kept whole, a shape with no outline of its own sat in the index, and
+    whatever asked it for one fell over; the parts go in as themselves.
+    """
+    if shape is None or shape.is_empty:
+        return []
+    if isinstance(shape, Polygon):
+        return [shape]
+    out = []
+    for part in getattr(shape, "geoms", ()) or ():
+        out.extend(parts(part))
+    return out
+
+
 class AreaIndex:
     def __init__(self, polygons: list[tuple[Polygon, dict]]):
         self._items = polygons
         self._tree = STRtree([p for p, _ in polygons]) if polygons else None
+        # How big each area is all told. An outline that came in in several
+        # pieces is still one area, and "the smallest one here wins" has to
+        # weigh the whole of it: half an industrial estate is smaller than
+        # the school inside it, and would have answered for its ground.
+        self._whole: dict[int, float] = {}
+        for shape, props in polygons:
+            self._whole[id(props)] = self._whole.get(id(props), 0.0) + shape.area
 
     @classmethod
     def load(cls, out_dir: str, map_name: str, proj) -> "AreaIndex":
         path = os.path.join(out_dir, f"{map_name}_areas.geojson")
-        if not os.path.exists(path):
+        data = knoxfiles.read(path, "the land use")
+        if not data:
             return cls([])
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
         items = []
         for feat in data.get("features", []):
+            # One table of properties for every piece of this feature, so the
+            # pieces are known below to be pieces of one area.
+            props = feat.get("properties") or {}
             geom = feat.get("geometry") or {}
             polys = geom.get("coordinates") or []
             if geom.get("type") == "Polygon":
@@ -60,9 +88,10 @@ class AreaIndex:
                 shape = Polygon(ring)
                 if not shape.is_valid:
                     shape = shape.buffer(0)
-                if shape.is_empty or shape.area <= 0:
-                    continue
-                items.append((shape, feat.get("properties") or {}))
+                for part in parts(shape):
+                    if part.area <= 0:
+                        continue
+                    items.append((part, props))
         return cls(items)
 
     def around(self, x: float, y: float) -> dict | None:
@@ -77,8 +106,9 @@ class AreaIndex:
         best = None
         for i in self._tree.query(point):
             shape, props = self._items[int(i)]
-            if shape.contains(point) and (best is None or shape.area < best[0]):
-                best = (shape.area, props)
+            size = self._whole.get(id(props), shape.area)
+            if shape.contains(point) and (best is None or size < best[0]):
+                best = (size, props)
         return best[1] if best else None
 
     def kind_for(self, x: float, y: float, tiles: int) -> str | None:
@@ -102,9 +132,10 @@ class AreaIndex:
         for shape, props in self._items:
             if props.get("category") not in categories:
                 continue
-            ring = [(float(x), float(y)) for x, y in shape.exterior.coords]
-            if len(ring) >= 3:
-                pen.polygon(ring, fill=1)
+            for part in parts(shape):
+                ring = [(float(x), float(y)) for x, y in part.exterior.coords]
+                if len(ring) >= 3:
+                    pen.polygon(ring, fill=1)
         return np.asarray(sheet, dtype=bool)
 
     def category_at(self, x: float, y: float) -> str | None:

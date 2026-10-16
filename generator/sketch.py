@@ -193,6 +193,31 @@ def _tags_for(entry_id: str, extra: dict | None) -> dict | None:
     return tags
 
 
+def _listed(value) -> list:
+    """A list of whatever was sent, or nothing. A cleaner never throws: this
+    reads what the window posts and what is on disk, and a number where a
+    list was expected used to come back as a Python TypeError."""
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _table(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _lat_lons(coords) -> list[tuple[float, float]]:
+    """GeoJSON (lon, lat) pairs as (lat, lon), skipping whatever is not a
+    pair of numbers: a hand-edited file can hold [null] where a point was."""
+    out = []
+    for point in _listed(coords):
+        if (isinstance(point, (list, tuple)) and len(point) >= 2
+                and isinstance(point[0], (int, float))
+                and isinstance(point[1], (int, float))
+                and not isinstance(point[0], bool)
+                and not isinstance(point[1], bool)):
+            out.append((float(point[1]), float(point[0])))
+    return out
+
+
 def features(drawn: dict | list | None) -> list[OSMFeature]:
     """Drawn shapes as OSM features, ready to go in beside downloaded ones.
 
@@ -205,35 +230,33 @@ def features(drawn: dict | list | None) -> list[OSMFeature]:
     two. They cannot be drawn through the window, but a hand-edited file or an
     older release's save can hold them.
     """
-    if isinstance(drawn, dict):
-        items = drawn.get("features") or []
-    else:
-        items = drawn or []
+    items = (_listed(drawn.get("features")) if isinstance(drawn, dict)
+             else _listed(drawn))
     out: list[OSMFeature] = []
     next_id = -1
     for item in items:
         if not isinstance(item, dict):
             continue
-        props = item.get("properties") or {}
-        geom = item.get("geometry") or {}
+        props = _table(item.get("properties"))
+        geom = _table(item.get("geometry"))
         tags = _tags_for(props.get("kind"), props.get("tags"))
         if tags is None:
             continue
         gtype = geom.get("type")
         coords = geom.get("coordinates")
-        if gtype == "Point" and isinstance(coords, list) and len(coords) >= 2:
-            points = [(float(coords[1]), float(coords[0]))]
+        if gtype == "Point":
+            points = _lat_lons([coords])
+            if not points:
+                continue
             kind = "node"
         elif gtype == "LineString" and isinstance(coords, list):
-            points = [(float(lat), float(lon)) for lon, lat in coords
-                      if isinstance(lon, (int, float)) and isinstance(lat, (int, float))]
+            points = _lat_lons(coords)
             kind = "way"
             if len(points) < 2:
                 continue
-        elif gtype == "Polygon" and coords:
-            ring = coords[0] or []
-            points = [(float(lat), float(lon)) for lon, lat in ring
-                      if isinstance(lon, (int, float)) and isinstance(lat, (int, float))]
+        elif gtype == "Polygon" and isinstance(coords, list) and coords:
+            ring = _listed(coords[0])
+            points = _lat_lons(ring)
             # A closed way is what makes an area an area, here and in OSM.
             if len(points) < 3:
                 continue
@@ -291,6 +314,11 @@ def _sheet_size(design: dict) -> tuple[float, float]:
         height = float(design.get("height_m") or 0)
     except (TypeError, ValueError):
         width = height = 0.0
+    # float("NaN") is a number to Python and nothing to anybody else: it goes
+    # through min() and max() untouched and comes out as "cannot convert
+    # float NaN to integer" four steps later, in the renderer.
+    if not math.isfinite(width) or not math.isfinite(height):
+        width = height = 0.0
     width = min(max(width or 1000.0, MIN_SHEET_M), MAX_SHEET_M)
     height = min(max(height or 1000.0, MIN_SHEET_M), MAX_SHEET_M)
     return width, height
@@ -298,7 +326,7 @@ def _sheet_size(design: dict) -> tuple[float, float]:
 
 def _anchor(design: dict) -> tuple[float, float]:
     """The south-west corner of the sheet, in the world."""
-    spot = design.get("anchor") or {}
+    spot = _table(design.get("anchor"))
     try:
         lat = float(spot.get("lat"))
         lon = float(spot.get("lon"))
@@ -340,6 +368,7 @@ def design_bbox(design: dict) -> tuple[float, float, float, float]:
     will measure it, and corrected; twice over is enough to be exact to the
     metre anywhere a map can be drawn.
     """
+    design = _table(design)
     width, height = _sheet_size(design)
     lat, lon = _anchor(design)
     d_lat = height / METRES_PER_DEGREE_LAT
@@ -380,13 +409,13 @@ def design_to_drawn(design: dict | None) -> dict:
                 south + (north - south) * (y / height)]
 
     out = []
-    for item in design.get("features") or []:
+    for item in _listed(design.get("features")):
         if not isinstance(item, dict):
             continue
         entry = BY_ID.get(str(item.get("kind")))
         if entry is None:
             continue
-        points = item.get("points") or []
+        points = _listed(item.get("points"))
         try:
             ring = [to_lonlat(p) for p in points]
         except (TypeError, ValueError, IndexError):

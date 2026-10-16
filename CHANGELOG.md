@@ -1,5 +1,81 @@
 # Changelog
 
+## 1.7.6
+
+- **A town with a works in it would not build** (`knoxbuild/areas.py`,
+  `knoxbuild/zones.py`). An industrial estate drawn as one way round two
+  yards, or a relation whose outline the download cut, mends into several
+  polygons rather than one - and one of those has no single outline to ask
+  for. Reading the ground under a works threw `'MultiPolygon' object has no
+  attribute 'exterior'` and the build stopped before a building was placed,
+  so a map that generated fine could not be built at all (issue #32).
+
+  Each part of such an outline now goes in as a shape of its own: the ground
+  under both halves reads as yard, both get fenced where the land use says
+  so, and a zone drawn over itself paints into the settings grid instead of
+  stopping the build. What decides which of two overlapping areas answers for
+  a point is still the whole of each, not the piece - half an estate is
+  smaller than the school inside it and would otherwise have answered for its
+  ground.
+
+- **A map file is written whole, or the one from before is left alone**
+  (`knoxfiles.py`, new; `generator/renderer.py`, `knoxbuild/placement.py`,
+  `knoxbuild/zones.py`, `app.py`). The ground, the buildings, the land use,
+  the fences, the settings and where the map stands in the world were each
+  written straight to their own name. Stop a generate, close the window or
+  lose the machine while one is going down - the ground alone is hundreds of
+  megabytes - and what stayed was half a file. Each is now written beside
+  itself and moved into place, which is one step: what is on disk is either
+  the file from before or the new one.
+
+- **And a damaged one says which it is and what to do** (`knoxbuild/build.py`,
+  `knoxbuild/fences.py`, `knoxbuild/structures.py`,
+  `knoxbuild/population.py`). Half a file used to be either a Python error out
+  of the middle of the build - `Expecting ',' delimiter: line 1 column
+  32790` - or nothing at all: the fences, the gates, the zones and even the
+  sheet a map was drawn on were skipped in silence, and the map came out
+  without them. Now the build stops and names the file, what it holds and
+  that generating the map again writes it afresh.
+
+- **Drawing a lift shaft ended the building** (`knoxbuild/layout.py`,
+  `knoxbuild/designer.py`). The hand-built building editor offers every room
+  the game has, and one of them - the lift shaft - has nothing that stands in
+  it: it is machinery the builder fits beside the stairs, not a room. Drawing
+  one and saving ended in `integer modulo by zero`, asking for a piece of
+  furniture out of a list of none. It is off the list now, a room with
+  nothing to put in it is furnished with nothing rather than throwing, and a
+  building drawn with one before this still builds.
+
+- **What the window posts is read as untrusted, and says so** (`generator/edits.py`,
+  `generator/sketch.py`, `knoxbuild/designer.py`, `knoxbuild/zones.py`,
+  `knoxbuild/placement.py`, `app.py`). Five of these read JSON the page sent
+  or a file beside the map, each with a cleaner whose whole job is to leave
+  out what it cannot use - and each threw instead when the *shape* was wrong
+  rather than the contents: a number where a list was expected came back as a
+  500 and `'int' object is not iterable`. Rubbish is now left out and the
+  answer is a refusal with something to read. Two it got wrong rather than
+  loudly: `"12"` as the list of features to remove took features 1 and 2 off
+  the map, and a sheet whose size arrived as `NaN` - which `float()` accepts -
+  came apart four steps later in the renderer.
+
+- **The drawing board's joins land where the streets really are**
+  (`knoxbuild/joins.py`, `static/js/app.js`, `app.py`). Three things about
+  joining a sheet to a map you have built:
+
+  **The streets were marked against the wrong edge.** The two maps line up
+  along their northern edge, but a street's distance down the border was
+  measured from the neighbour's height rather than the sheet's. Any sheet of
+  a different height - which Fit to cells makes - had every street marked out
+  by the difference, so a road drawn to one did not meet it.
+
+  **A map made before 1.5.1 has no picture of its roads**, and the board said
+  "no street on that side" as though it had looked. It now says the map
+  cannot be asked, and that generating it again puts its streets on the edge.
+
+  **A sheet that is not whole cells** is built with empty ground round it and
+  the drawing centred in that, so its streets stop short of the border. The
+  join panel says so while there is still time to press Fit to cells.
+
 ## 1.7.4
 
 - **The drawing board joins the map next door** (`knoxbuild/joins.py`, new;

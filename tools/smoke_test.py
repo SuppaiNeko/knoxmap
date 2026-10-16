@@ -67,6 +67,13 @@ def run(work: str, report: Report, compile_too: bool = False) -> None:
     report.say("terrain", f"{ground.width} x {ground.height} tiles, road grid at "
                           f"{angle:.0f} degrees", ground.width > 100)
 
+    # Every file the renderer writes goes down beside itself and is moved into
+    # place (knoxfiles.py), so a generate that is stopped halfway leaves the
+    # map as it was. What a finished one must leave is nothing half written.
+    half = sorted(f for f in os.listdir(out) if f.endswith(".part"))
+    report.say("files", "every one written whole" if not half
+                        else f"half-written files left behind: {half}", not half)
+
     # The download the terrain was drawn from, kept where the rest of the
     # build looks for it. Without it the paper map gets the buildings and
     # nothing else: no roads, no water, no street names.

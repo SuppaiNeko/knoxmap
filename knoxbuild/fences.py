@@ -12,10 +12,11 @@ cell, so they compile into the lots like anything else in a .tbx.
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 from xml.sax.saxutils import quoteattr
+
+import knoxfiles
 
 from . import catalog as C
 
@@ -217,12 +218,9 @@ def _openings(out_dir: str, map_name: str, proj):
     one. Points in tiles, with the paths as lines to be crossed with each
     fence where it is built."""
     path = os.path.join(out_dir, f"{map_name}_fence_openings.geojson")
-    if not os.path.exists(path):
-        return [], []
-    try:
-        with open(path, encoding="utf-8") as f:
-            feats = json.load(f).get("features", [])
-    except (OSError, ValueError):
+    feats = (knoxfiles.read(path, "the gates and paths through the fences",
+                            default={}) or {}).get("features", [])
+    if not feats:
         return [], []
     gates, paths = [], []
     for feat in feats:
@@ -291,10 +289,7 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
     from .world import Placement
 
     path = os.path.join(out_dir, f"{map_name}_fences.geojson")
-    lines = []
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            lines = json.load(f).get("features", [])
+    lines = (knoxfiles.read(path, "the fences", default={}) or {}).get("features", [])
     sites = _fenced_sites(areas)
     if not lines and not extra and not sites:
         return [], 0

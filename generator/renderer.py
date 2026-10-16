@@ -12,7 +12,6 @@ meters-per-tile scale stays consistent.
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 import random
@@ -22,6 +21,7 @@ from typing import Iterable
 import pyproj
 from PIL import Image, ImageDraw, ImageFilter
 
+import knoxfiles
 import knoxstop
 
 from . import pz_colors as C
@@ -946,56 +946,60 @@ def render(features: Iterable[OSMFeature], south: float, west: float,
     buildings_path = os.path.join(output_dir, f"{map_name}_buildings.geojson")
     meta_path = os.path.join(output_dir, f"{map_name}_info.json")
 
-    landscape.save(landscape_path, format="BMP")
-    vegetation.save(veg_path, format="BMP")
-    road_hierarchy.save(road_hierarchy_path, format="BMP")
+    # Every one of these is written beside itself and moved into place
+    # (knoxfiles.py). A map's ground is hundreds of megabytes and the window
+    # can be closed while it is going down, which used to leave half a file
+    # that the build then read as the map.
+    knoxfiles.save(landscape, landscape_path, format="BMP")
+    knoxfiles.save(vegetation, veg_path, format="BMP")
+    knoxfiles.save(road_hierarchy, road_hierarchy_path, format="BMP")
     # The ground as drawn, before knoxbuild paints front paths into it
     # (knoxbuild/yards.py), so building again starts from clean ground.
-    landscape.save(os.path.join(output_dir, f"{map_name}_ground_base.bmp"), format="BMP")
-    vegetation.save(os.path.join(output_dir, f"{map_name}_veg_base.bmp"), format="BMP")
-    spawn_map.save(spawn_path, format="BMP")
-    preview.save(preview_path, format="PNG")
+    knoxfiles.save(landscape, os.path.join(output_dir, f"{map_name}_ground_base.bmp"),
+                   format="BMP")
+    knoxfiles.save(vegetation, os.path.join(output_dir, f"{map_name}_veg_base.bmp"),
+                   format="BMP")
+    knoxfiles.save(spawn_map, spawn_path, format="BMP")
+    knoxfiles.save(preview, preview_path, format="PNG")
 
-    with open(buildings_path, "w", encoding="utf-8") as f:
-        json.dump(_buildings_geojson(building_feats, indoor_feats), f)
-    with open(os.path.join(output_dir, f"{map_name}_areas.geojson"), "w", encoding="utf-8") as f:
-        json.dump(_areas_geojson(buckets), f)
-    with open(os.path.join(output_dir, f"{map_name}_fences.geojson"), "w", encoding="utf-8") as f:
-        json.dump(_lines_geojson([f for f in fence_feats
-                                  if clip is None or _inside(f, proj, clip)]), f)
-    with open(os.path.join(output_dir, f"{map_name}_fence_openings.geojson"), "w",
-              encoding="utf-8") as f:
-        json.dump(_openings_geojson(gate_feats, buckets), f)
-    with open(os.path.join(output_dir, f"{map_name}_structures.json"), "w", encoding="utf-8") as f:
-        json.dump({"bridges": lifted.bridges, "monuments": lifted.monuments,
-                   "tiles": lifted.rows()}, f)
-    with open(os.path.join(output_dir, f"{map_name}_places.json"), "w",
-              encoding="utf-8") as f:
-        json.dump(_places(place_feats, proj), f, ensure_ascii=False)
+    knoxfiles.write(buildings_path, _buildings_geojson(building_feats, indoor_feats))
+    knoxfiles.write(os.path.join(output_dir, f"{map_name}_areas.geojson"),
+                    _areas_geojson(buckets))
+    knoxfiles.write(os.path.join(output_dir, f"{map_name}_fences.geojson"),
+                    _lines_geojson([f for f in fence_feats
+                                    if clip is None or _inside(f, proj, clip)]))
+    knoxfiles.write(os.path.join(output_dir, f"{map_name}_fence_openings.geojson"),
+                    _openings_geojson(gate_feats, buckets))
+    knoxfiles.write(os.path.join(output_dir, f"{map_name}_structures.json"),
+                    {"bridges": lifted.bridges, "monuments": lifted.monuments,
+                     "tiles": lifted.rows()})
+    knoxfiles.write(os.path.join(output_dir, f"{map_name}_places.json"),
+                    _places(place_feats, proj), ensure_ascii=False)
 
     cells_x, cells_y = proj.cell_grid()
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "map_name": map_name,
-            "bbox": {"south": south, "west": west, "north": north, "east": east},
-            "rotation": rotation,
-            "osm_cache": osm_cache,
-            "straight_roads": bool(straight_roads),
-            "osm_bbox": list(osm_bbox) if osm_bbox else None,
-            "shape": shape,
-            "meters_per_tile": meters_per_tile,
-            "width_tiles": proj.width,
-            "height_tiles": proj.height,
-            "cells_x": cells_x,
-            "cells_y": cells_y,
-            "spawn_density_max": spawn_density,
-            "building_count": len(building_feats),
-            "feature_count": sum(len(v) for v in buckets.values()),
-            # How many homes came from an address with no building drawn for
-            # it, so "it made none of mine" is a number rather than a guess.
-            "houses_from_addresses": len(addressed),
-            "guide_reference": "Thuztor Mapping Guide v0.2",
-        }, f, indent=2)
+    # Last of the lot on purpose: the build looks for <name>_info.json to know
+    # there is a map here at all, so it appears once everything beside it has.
+    knoxfiles.write(meta_path, {
+        "map_name": map_name,
+        "bbox": {"south": south, "west": west, "north": north, "east": east},
+        "rotation": rotation,
+        "osm_cache": osm_cache,
+        "straight_roads": bool(straight_roads),
+        "osm_bbox": list(osm_bbox) if osm_bbox else None,
+        "shape": shape,
+        "meters_per_tile": meters_per_tile,
+        "width_tiles": proj.width,
+        "height_tiles": proj.height,
+        "cells_x": cells_x,
+        "cells_y": cells_y,
+        "spawn_density_max": spawn_density,
+        "building_count": len(building_feats),
+        "feature_count": sum(len(v) for v in buckets.values()),
+        # How many homes came from an address with no building drawn for
+        # it, so "it made none of mine" is a number rather than a guess.
+        "houses_from_addresses": len(addressed),
+        "guide_reference": "Thuztor Mapping Guide v0.2",
+    }, indent=2)
 
     return RenderResult(
         landscape_path=landscape_path,

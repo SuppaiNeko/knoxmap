@@ -31,6 +31,8 @@ import json
 import os
 import re
 
+import knoxfiles
+
 from .world import CELL_SIZE, _installed_boxes, _project_box
 
 # Knox County, in 300-tile cells. The vanilla map is 78 x 63 compiled cells of
@@ -436,8 +438,7 @@ def _shift_pzw(path: str, cells: tuple[int, int]) -> bool:
                      f'<worldOrigin origin="{cells[0]},{cells[1]}"/>', text, count=1)
     if not n:
         return False
-    with open(path, "wb") as f:
-        f.write(new.encode("utf-8"))
+    knoxfiles.write_text(path, new)
     return True
 
 
@@ -457,8 +458,7 @@ def _shift_worldmap(path: str, delta: tuple[int, int]) -> bool:
     new, n = re.subn(r'<cell x="(-?\d+)" y="(-?\d+)">', one, text)
     if not n:
         return False
-    with open(path, "wb") as f:
-        f.write(new.encode("utf-8"))
+    knoxfiles.write_text(path, new)
     return True
 
 
@@ -478,8 +478,7 @@ def _shift_points(path: str, delta_tiles: tuple[int, int]) -> bool:
     new, n = re.subn(r'<point x="(-?[\d.]+)" y="(-?[\d.]+)"/>', one, text)
     if not n:
         return False
-    with open(path, "wb") as f:
-        f.write(new.encode("utf-8"))
+    knoxfiles.write_text(path, new)
     return True
 
 
@@ -499,8 +498,7 @@ def _shift_annotations(path: str, delta_tiles: tuple[int, int]) -> bool:
                      one, text)
     if not n:
         return False
-    with open(path, "wb") as f:
-        f.write(new.encode("utf-8"))
+    knoxfiles.write_text(path, new)
     return True
 
 
@@ -745,7 +743,9 @@ def link_design(out_dir: str, map_name: str, points, kind: str = "primary",
     if kind not in kinds:
         raise ValueError(f"No such thing to draw: {kind}")
     line = []
-    for point in points or []:
+    if not isinstance(points, (list, tuple)):
+        raise ValueError("A road is a list of points in world tiles.")
+    for point in points:
         try:
             line.append((float(point[0]), float(point[1])))
         except (TypeError, ValueError, IndexError):

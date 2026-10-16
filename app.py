@@ -25,6 +25,7 @@ from pathlib import Path
 from flask import (Flask, jsonify, render_template, request, send_file,
                    send_from_directory)
 
+import knoxfiles
 import knoxlog
 import knoxstop
 from generator import edits as mapedits
@@ -174,7 +175,7 @@ def api_versions():
 def api_versions_install():
     """Download the version chosen in the menu, to go in on restart."""
     import updater
-    version = str((request.get_json(silent=True) or {}).get("version", "")).strip()
+    version = str(_json_body().get("version", "")).strip()
     if not re.fullmatch(r"\d+(\.\d+){0,3}", version):
         return failed("Choose a version from the list.", 400)
     if not updater.managed():
@@ -1247,6 +1248,11 @@ def api_buildings():
         _set_progress(map_dir.name, stage="buildings-done", note="", fraction=1.0)
     except knoxstop.Stopped:
         return _stopped(map_dir.name, "buildings")
+    except knoxfiles.Damaged as exc:
+        # One of the map's own files was left half written. That is the
+        # mapper's to put right by generating the map again, and the message
+        # says so, so it is not dressed up as a failure of the build.
+        return failed(str(exc), 400, exc)
     except MemoryError as exc:
         need = info["width"] * info["height"] * BUILD_BYTES_PER_TILE + BUILD_BASE_BYTES
         return failed(
@@ -1364,8 +1370,10 @@ def _load_settings(map_dir: Path) -> Settings:
 
 def _save_settings(map_dir: Path, settings: Settings) -> None:
     try:
-        with open(_settings_path(map_dir), "w", encoding="utf-8") as f:
-            json.dump(settings.to_dict(), f, indent=2)
+        # Written beside itself and moved into place: half a settings.json is
+        # read as no settings at all, so the next build of that map quietly
+        # used the defaults instead of what the mapper had set.
+        knoxfiles.write(str(_settings_path(map_dir)), settings.to_dict(), indent=2)
     except OSError:
         pass          # a map whose settings cannot be saved still builds
 
@@ -1569,7 +1577,8 @@ def api_design(name: str):
     _save_design(map_dir, design)
     south, west, north, east = sketch.design_bbox(design)
     made = sketch.features(sketch.design_to_drawn(design))
-    return jsonify({"saved": len(design.get("features") or []),
+    drawn = design.get("features")
+    return jsonify({"saved": len(drawn) if isinstance(drawn, (list, tuple)) else 0,
                     "usable": len(made),
                     "bbox": {"south": south, "west": west,
                              "north": north, "east": east}})
@@ -1600,6 +1609,10 @@ def api_board_join(name: str):
     try:
         sheet_w = float(request.args.get("w") or 900)
         sheet_h = float(request.args.get("h") or 900)
+    except (TypeError, ValueError):
+        return jsonify({"error": "The sheet is two numbers: how wide and how "
+                                 "tall it is, in metres."}), 400
+    try:
         out = joins.sheet_joins(str(map_dir), map_dir.name, side, sheet_w, sheet_h)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -1812,7 +1825,8 @@ def api_builder_save():
 
     body = _json_body()
     design = body.get("design")
-    name = body.get("name") or (design or {}).get("name") or ""
+    design = design if isinstance(design, dict) else {}
+    name = body.get("name") or design.get("name") or ""
     try:
         about = D.keep(BASE_DIR, name, design)
     except (ValueError, OSError) as exc:
@@ -1897,7 +1911,8 @@ def api_sketch(name: str):
         return jsonify({"error": "Expected a GeoJSON FeatureCollection."}), 400
     _save_sketch(map_dir, drawn)
     made = sketch.features(drawn)
-    return jsonify({"saved": len(drawn.get("features") or []),
+    sent = drawn.get("features")
+    return jsonify({"saved": len(sent) if isinstance(sent, (list, tuple)) else 0,
                     "usable": len(made)})
 
 
@@ -2235,7 +2250,9 @@ def api_steam_libraries():
     import knoxpaths
 
     if request.method == "POST":
-        folders = [str(f).strip().strip('"') for f in (request.get_json(silent=True) or {}).get("folders", [])
+        sent = _json_body().get("folders")
+        folders = [str(f).strip().strip('"')
+                   for f in (sent if isinstance(sent, (list, tuple)) else [])
                    if str(f).strip()]
         bad = [f for f in folders if not knoxpaths.library_of(f)]
         if bad:

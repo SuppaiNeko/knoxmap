@@ -20,11 +20,11 @@ County, whose spawn map runs 1 to 10 - and left adjustable.
 """
 from __future__ import annotations
 
-import json
 import os
 
 import numpy as np
 from PIL import Image
+import knoxfiles
 
 from generator import pz_colors as C
 
@@ -243,28 +243,24 @@ def recount(out_dir: str, settings) -> dict:
     fp_path = os.path.join(out_dir, f"{map_name}_footprints.npz")
     if not os.path.exists(fp_path):
         raise FileNotFoundError("generate the buildings first")
-    with open(os.path.join(out_dir, f"{map_name}_info.json"), encoding="utf-8") as f:
-        info = json.load(f)
+    info = knoxfiles.read(os.path.join(out_dir, f"{map_name}_info.json"),
+                          "what the map is") or {}
     img, summary = build_spawn_map(load_footprints(fp_path), info["width_tiles"],
                                    info["height_tiles"], info["meters_per_tile"],
                                    os.path.join(out_dir, f"{map_name}.bmp"), settings)
-    img.save(os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"), format="BMP")
+    knoxfiles.save(img, os.path.join(out_dir, f"{map_name}_ZombieSpawnMap.bmp"),
+                   format="BMP")
     summary["official"] = [p for p in official_population(out_dir, map_name)
                            if p.get("inside")][:5]
-    with open(os.path.join(out_dir, f"{map_name}_population.json"), "w",
-              encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
+    knoxfiles.write(os.path.join(out_dir, f"{map_name}_population.json"),
+                    summary, indent=2, ensure_ascii=False)
     return summary
 
 
 def official_population(out_dir: str, map_name: str) -> list[dict]:
     """Places OpenStreetMap gives a population for, largest first."""
     path = os.path.join(out_dir, f"{map_name}_places.json")
-    if not os.path.exists(path):
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            places = json.load(f)
-    except (OSError, ValueError):
+    places = knoxfiles.read(path, "the towns and villages on the map", default=[])
+    if not places:
         return []
     return sorted(places, key=lambda p: -p.get("population", 0))

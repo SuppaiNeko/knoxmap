@@ -38,6 +38,17 @@ class Cleaning(unittest.TestCase):
                                "tags": {"1": {"amenity": None}}})
         self.assertEqual(edits.count(cleaned), 0)
 
+    def test_the_wrong_shape_of_edit_list_is_dropped_too(self):
+        # A table where a list was expected, or a number where either was.
+        # This reads both what the window posts and the file kept beside the
+        # map, and either can arrive like this; it threw "'str' object has no
+        # attribute 'items'" and the window showed a 500.
+        for raw in ("nonsense", 7, None, [], {"tags": "x"}, {"moved": [1, 2]},
+                    {"removed": 5}, {"tags": {"1": "no"}}, {"moved": {"1": 5}},
+                    {"removed": "12"}, {"moved": {"1": [[0, "a"], 7]}}):
+            with self.subTest(raw=raw):
+                self.assertEqual(edits.count(edits.clean(raw)), 0)
+
     def test_a_shape_of_one_point_is_not_a_shape(self):
         self.assertEqual(edits.clean({"moved": {"1": [[0.0, 0.0]]}})["moved"], {})
 

@@ -43,22 +43,36 @@ def empty() -> dict:
     return {"removed": [], "moved": {}, "tags": {}}
 
 
+def _as_list(value) -> list:
+    return list(value) if isinstance(value, (list, tuple, set)) else []
+
+
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def clean(raw: dict | None) -> dict:
-    """An edit list from untrusted input, with anything unusable left out."""
+    """An edit list from untrusted input, with anything unusable left out.
+
+    Untrusted means untrusted: this reads what the window posts and what is
+    on disk beside the map, and a list where a table was expected - or a
+    number where either was - threw rather than being left out, which is the
+    one thing a cleaner must not do.
+    """
     raw = raw if isinstance(raw, dict) else {}
     out = empty()
-    for value in raw.get("removed") or []:
+    for value in _as_list(raw.get("removed")):
         try:
             out["removed"].append(int(value))
         except (TypeError, ValueError):
             continue
-    for key, ring in (raw.get("moved") or {}).items():
+    for key, ring in _as_dict(raw.get("moved")).items():
         try:
             osm_id = int(key)
         except (TypeError, ValueError):
             continue
         points = []
-        for point in ring or []:
+        for point in _as_list(ring):
             try:
                 lat, lon = float(point[0]), float(point[1])
             except (TypeError, ValueError, IndexError):
@@ -69,12 +83,12 @@ def clean(raw: dict | None) -> dict:
         # nothing to replace the original with.
         if len(points) >= 2:
             out["moved"][osm_id] = points
-    for key, tags in (raw.get("tags") or {}).items():
+    for key, tags in _as_dict(raw.get("tags")).items():
         try:
             osm_id = int(key)
         except (TypeError, ValueError):
             continue
-        kept = {str(k): str(v) for k, v in (tags or {}).items()
+        kept = {str(k): str(v) for k, v in _as_dict(tags).items()
                 if k in EDITABLE_TAGS and v not in (None, "")}
         if kept:
             out["tags"][osm_id] = kept

@@ -4088,6 +4088,13 @@ def _furnish(plan: Plan, rng: random.Random,
             # furnishes a police office out of location_business_office at
             # 3.15 pieces per 10 m2 and almost nothing else.
             base = list(CIVIC_ROOMS[r.kind])
+        if not base:
+            # A room with nothing on its wishlist: the lift shaft, which the
+            # builder puts in as machinery rather than a room, and anything
+            # drawn as one by hand (knoxbuild/designer.py). Nothing to stand
+            # in it, and asking for one piece in a list of none used to end
+            # the whole building in "integer modulo by zero".
+            continue
         shelving = [s for s in SHELVING.get(r.kind, DEFAULT_SHELVING)
                     if s in C.FURNITURE] or ["shelf"]
         if plan.kind in HOME_KINDS:

@@ -56,12 +56,23 @@ class WhereTheRoadsComeOut(unittest.TestCase):
         self.assertEqual(joins.edges(broad, "m")["roads"]["W"], [])
 
     def test_a_map_with_no_road_picture_still_gives_its_size(self):
+        # And says that is what it is: a map built before KnoxMap drew the
+        # road picture has streets on its edge like any other, it just cannot
+        # say where they are. Told "no street on that side" people went
+        # looking on the ground for one they had seen there.
         bare = tempfile.mkdtemp()
         with open(os.path.join(bare, "m_info.json"), "w", encoding="utf-8") as f:
             f.write('{"width_tiles": 50, "height_tiles": 40, "meters_per_tile": 1}')
         found = joins.edges(bare, "m")
         self.assertEqual((found["widthM"], found["heightM"]), (50.0, 40.0))
         self.assertEqual(found["roads"], {s: [] for s in joins.SIDES})
+        self.assertFalse(found["roadsKnown"])
+
+    def test_a_map_whose_roads_were_read_says_so_even_with_none_on_a_side(self):
+        where = a_map(roads=[((38, 42), "row", 3)])
+        found = joins.edges(where, "m")
+        self.assertTrue(found["roadsKnown"])
+        self.assertEqual(found["roads"]["N"], [])
 
     def test_a_map_folder_with_nothing_in_it_is_not_an_error(self):
         found = joins.edges(tempfile.mkdtemp(), "m")
@@ -97,6 +108,18 @@ class OnTheNewSheet(unittest.TestCase):
         south = joins.sheet_joins(self.dir, "m", "S", 240.0, 300.0)
         self.assertEqual(south["meets"], "N")
         self.assertEqual([(j["x"], j["y"]) for j in south["joins"]], [(120.0, 300.0)])
+
+    def test_a_taller_sheet_measures_down_from_the_edge_they_share(self):
+        # The two are lined up along their northern edge, so a road 80 m down
+        # the map is 80 m down the sheet - not 80 m up from the sheet's own
+        # bottom, which on a sheet of another height is somewhere else
+        # entirely. A 600 m sheet beside a 160 m map used to have the street
+        # marked 440 m out of place.
+        out = joins.sheet_joins(self.dir, "m", "E", 500.0, 600.0)
+        self.assertEqual([(j["x"], j["y"]) for j in out["joins"]], [(0.0, 520.0)])
+        # And a sheet shorter than the map: the road is where it is, or off.
+        short = joins.sheet_joins(self.dir, "m", "W", 500.0, 100.0)
+        self.assertEqual([(j["x"], j["y"]) for j in short["joins"]], [(500.0, 20.0)])
 
     def test_a_road_past_the_end_of_a_short_sheet_is_left_off(self):
         out = joins.sheet_joins(self.dir, "m", "E", 500.0, 40.0)

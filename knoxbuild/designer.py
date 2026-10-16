@@ -22,6 +22,7 @@ building made in BuildingEd.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import zlib
@@ -82,8 +83,12 @@ def room_kinds(kind: str | None = None) -> list[dict]:
     house = [name for name in HOUSE_ROOMS
              if name not in first and name in L.ROOM_STYLE]
     out += [entry(name, "Rooms of a house") for name in house]
+    # A room with nothing to put in it is not a room anybody draws: the lift
+    # shaft is machinery the builder fits where the stairs are, and drawn by
+    # hand it is a sealed box with no way in and no lift in it.
     rest = sorted((name for name in L.ROOM_STYLE
-                   if name not in first and name not in house),
+                   if name not in first and name not in house
+                   and L.ROOM_STYLE[name][2]),
                   key=room_label)
     out += [entry(name, "Every other room") for name in rest]
     return out
@@ -91,14 +96,28 @@ def room_kinds(kind: str | None = None) -> list[dict]:
 
 # ---- the design itself ------------------------------------------------------
 
+def _listed(value) -> list:
+    """A list of whatever was sent, or nothing. A cleaner never throws: this
+    reads what the window posts and what is on disk, and a number where a
+    list was expected used to come back as a Python TypeError."""
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _table(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def _int(value, low, high, fallback):
     try:
-        number = int(float(value))
+        number = float(value)
     except (TypeError, ValueError):
         return fallback
-    if number != number:
+    # float() takes "NaN" and "inf" and int() takes neither: a sheet whose
+    # width arrived as one of those ended in "cannot convert float infinity
+    # to integer" rather than in the size it was supposed to fall back to.
+    if not math.isfinite(number):
         return fallback
-    return min(max(number, low), high)
+    return min(max(int(number), low), high)
 
 
 def _stable_seed(*parts) -> int:
@@ -136,7 +155,7 @@ def clean(raw) -> dict:
 
     # Level by level, so a room drawn upstairs cannot cut one downstairs.
     by_level: dict[int, list[tuple[tuple, str]]] = {}
-    for item in raw.get("rooms") or []:
+    for item in _listed(raw.get("rooms")):
         if not isinstance(item, dict):
             continue
         level = _int(item.get("level"), 0, storeys - 1, 0)
@@ -614,6 +633,7 @@ def drop_design(base_dir, name: str) -> bool:
 
 def keep(base_dir, name: str, design: dict) -> dict:
     """Save a design as a preset: the drawing, and the .tbx it builds into."""
+    design = _table(design)
     clean_name = P.safe_name(name or design.get("name") or "")
     if not clean_name:
         raise ValueError("A preset needs a name.")

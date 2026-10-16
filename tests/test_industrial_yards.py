@@ -70,5 +70,46 @@ class YardsAreNotRoads(unittest.TestCase):
         self.assertEqual(int(weight[20, 20]), 2)
 
 
+class AnEstateDrawnAsOneWayRoundTwoYards(unittest.TestCase):
+    """A landuse ring that touches itself is two yards, not nothing.
+
+    Mending such a ring gives several polygons back instead of one, and one
+    of those in the index has no outline to ask for: reading the ground under
+    a works threw 'MultiPolygon object has no attribute exterior' and the
+    whole build stopped before a single building was placed.
+    """
+
+    # Two squares joined by the line the mapper drew between them.
+    PINCHED = [[[10, 10], [19, 10], [19, 19], [10, 19], [10, 10],
+                [21, 21], [29, 21], [29, 29], [21, 29], [21, 21]]]
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        ground = np.zeros((40, 40, 3), dtype=np.uint8)
+        ground[:, :] = C.MEDIUM_GRASS
+        ground[10:30, 10:30] = C.LIGHT_ASPHALT
+        Image.fromarray(ground).save(os.path.join(self.dir, "m.bmp"), format="BMP")
+        path = os.path.join(self.dir, "m_areas.geojson")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"type": "FeatureCollection", "features": [{
+                "type": "Feature", "properties": {"category": "industrial"},
+                "geometry": {"type": "Polygon",
+                             "coordinates": self.PINCHED}}]}, f)
+        self.index = AreaIndex.load(self.dir, "m", PROJ)
+
+    def test_both_halves_are_in_the_index_as_shapes_of_their_own(self):
+        self.assertEqual(len(self.index._items), 2)
+        self.assertEqual(self.index.category_at(14, 14), "industrial")
+        self.assertEqual(self.index.category_at(25, 25), "industrial")
+        self.assertIsNone(self.index.category_at(35, 35))
+
+    def test_the_ground_under_both_of_them_reads_as_yard(self):
+        weight = _road_weight(self.dir, "m", PROJ, None, self.index)
+        self.assertEqual(int(weight[14, 14]), 0)
+        self.assertEqual(int(weight[25, 25]), 0)
+        # The gravel the estate does not cover is still read as it was.
+        self.assertEqual(int(weight[11, 28]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
