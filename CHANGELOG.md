@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Half walls and missing walls inside buildings** (`knoxbuild/catalog.py`).
+  Two of the game's own interior wall styles, `walls_commercial_02` at 16 and
+  32, are see-through partitions (`WallWTrans`/`WallNTrans`, no corner and no
+  door piece), not walls. Used as one they came out as half walls and as walls
+  that were not there. They are not offered any more; 263 of 1,410 buildings
+  in a test map of central Amsterdam used them. Found and fixed by Zombaxx.
+
 - **The lift could wall off part of a floor** (`knoxbuild/layout.py`). A lift
   shaft is a sealed box, so what it stands across is a wall. In a tall
   building with a narrow arm - an L or a T whose neck is a few tiles wide -
