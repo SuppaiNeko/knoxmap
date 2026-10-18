@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A fence you mapped or drew is not paved over by one of ours**
+  (`knoxbuild/fences.py`). The fences put round back yards were built last,
+  and the last fence to claim a tile edge kept it, so an OpenStreetMap fence
+  or a hedge drawn in the editor was quietly replaced by a made-up garden
+  fence. A yard fence that crosses one somebody put there is not built at
+  all now, and where the two share an edge the real one keeps it. Reported
+  by Zombaxx.
+
+
 - **The grid is on the sheet before anything is drawn on it**
   (`knoxbuild/designer.py`). The hand-built building editor drew its grid
   only under a room that was already there, which is the moment it stops

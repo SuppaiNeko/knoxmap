@@ -140,5 +140,55 @@ class WaysThroughAFence(unittest.TestCase):
         self.assertEqual(sorted(x for (x, y) in built if y == 6), list(range(2, 14)))
 
 
+class WhoseFenceItIs(unittest.TestCase):
+    """A yard fence is this program's guess; a mapped or drawn one is not.
+
+    Reported in #bug-reports: the fences put round back yards were laid over
+    the fences in OpenStreetMap and over hedges drawn in the editor, because
+    the made-up ones were built last and the last one to claim an edge kept
+    it.
+    """
+
+    def built(self, mapped, yard):
+        directory = self.enterContext(TemporaryDirectory())
+        bdir = os.path.join(directory, "buildings")
+        os.mkdir(bdir)
+        with open(os.path.join(directory, "map_fences.geojson"), "w") as f:
+            json.dump({"features": [{
+                "type": "Feature",
+                "properties": {"barrier": "hedge"},
+                "geometry": {"type": "LineString", "coordinates": mapped}}]}, f)
+        projection = SimpleNamespace(width=16, height=16,
+                                     to_px=lambda lat, lon: (lon, lat))
+        placements, count = build_fences(
+            directory, "map", projection, np.zeros((16, 16), dtype=bool),
+            None, bdir, extra=[(yard, "white_picket", [])])
+        tiles = {}
+        for placement in placements:
+            root = ElementTree.parse(os.path.join(directory, placement.tbx_path))
+            names = [f.find("entry/tile").get("name")
+                     for f in root.findall(".//furniture")]
+            for obj in root.findall(".//floor/object"):
+                tiles[(placement.tile_x + int(obj.get("x")),
+                       placement.tile_y + int(obj.get("y")))] = \
+                    names[int(obj.get("FurnitureTiles"))]
+        return tiles, count
+
+    def test_a_yard_fence_that_crosses_a_mapped_one_is_not_built(self):
+        # The hedge runs across where the yard fence would go.
+        tiles, count = self.built(mapped=[[2, 8], [12, 8]],
+                                  yard=[(6, 4), (6, 12)])
+        self.assertTrue(count, "the hedge itself should still be there")
+        # Nothing of the yard fence: no tile of it above or below the hedge.
+        self.assertNotIn((6, 5), tiles)
+        self.assertNotIn((6, 11), tiles)
+
+    def test_one_that_keeps_out_of_the_way_is_built_as_before(self):
+        tiles, _count = self.built(mapped=[[2, 2], [12, 2]],
+                                   yard=[(6, 8), (12, 8)])
+        self.assertTrue(any(y >= 7 for _x, y in tiles),
+                        "the yard fence should still be built")
+
+
 if __name__ == "__main__":
     unittest.main()

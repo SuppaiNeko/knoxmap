@@ -121,6 +121,29 @@ def _fenced_sites(areas) -> list:
     return out
 
 
+def _mapped_lines(runs: list[list]):
+    """The fences somebody put there, as one geometry to ask about."""
+    if not runs:
+        return None
+    from shapely.geometry import LineString
+    from shapely.ops import unary_union
+
+    kept = [LineString(pts) for pts in runs if len(pts) >= 2]
+    return unary_union(kept) if kept else None
+
+
+def _crosses(pts: list, drawn) -> bool:
+    """Whether this run of fence meets one that was mapped or drawn."""
+    if drawn is None or len(pts) < 2:
+        return False
+    from shapely.geometry import LineString
+
+    try:
+        return LineString(pts).intersects(drawn)
+    except Exception:          # noqa: BLE001 - a line that is not a line
+        return False
+
+
 def style_for(tags: dict, area: str | None) -> str:
     """Which fence a line gets: from its own tags first, its surroundings next.
 
@@ -317,8 +340,11 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
     edges: dict[tuple[int, int], dict[str, str]] = {}
     ends: dict[tuple[int, int], str] = {}
     # Mapped fences, then the ones drawn round back yards (knoxbuild/yards.py),
-    # which come as tile points with their style.
-    todo = []
+    # which come as tile points with their style. Each carries whether it is a
+    # fence somebody put there - mapped in OpenStreetMap or drawn in the
+    # editor - or one made up here, because where the two meet the real one
+    # wins.
+    todo: list[tuple[list, str, bool]] = []
     for feat in lines:
         coords = feat.get("geometry", {}).get("coordinates") or []
         if len(coords) < 2:
@@ -326,7 +352,8 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
         pts = [proj.to_px(lat, lon) for lon, lat in coords]
         mid = pts[len(pts) // 2]
         todo.append((pts, style_for(feat.get("properties") or {},
-                                    areas.category_at(*mid) if areas else None)))
+                                    areas.category_at(*mid) if areas else None),
+                     True))
     # Sites that are fenced in the world whether or not anyone drew the fence.
     # OpenStreetMap maps an army base as landuse=military far more often than
     # it maps the wire round it, so a base was open ground you could walk
@@ -335,11 +362,18 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
     for shape in sites:
         ring = list(shape.exterior.coords)
         if len(ring) >= 4:
-            todo.append(([(float(x), float(y)) for x, y in ring], "tall_chainlink"))
+            todo.append(([(float(x), float(y)) for x, y in ring],
+                         "tall_chainlink", True))
     gates: dict[tuple[int, int], str] = {}
+    # A yard fence is this program's guess at what is round a house. Where
+    # somebody has mapped or drawn a fence or a hedge that crosses it, theirs
+    # is what is there, and the guess is dropped rather than laid over it.
+    drawn = _mapped_lines([pts for pts, _style, real in todo if real])
     for item in extra or ():
         pts, style = item[0], item[1]
-        todo.append((pts, style))
+        if _crosses(pts, drawn):
+            continue
+        todo.append((pts, style, False))
         for gx, gy in (item[2] if len(item) > 2 else ()):
             gates[(gx, gy)] = style
 
@@ -367,7 +401,7 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
     open_up(gate_points, True)
     gated: set[int] = set()
 
-    for pts, style in todo:
+    for pts, style, real in todo:
         if paths is not None:
             open_up(_path_crossings(pts, paths), False)
         walk = _grid_path(pts)
@@ -383,7 +417,9 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
                     continue
                 if not _way_through(openings, gated, gates, (x, y1), style):
                     continue
-                edges.setdefault((x, y1), {})["N"] = style
+                side = edges.setdefault((x, y1), {})
+                if real or "N" not in side:
+                    side["N"] = style
             else:                             # along a west edge
                 y = min(y1, y2)
                 if building_at(x1, y) or building_at(x1 - 1, y):
@@ -394,7 +430,9 @@ def build_fences(out_dir: str, map_name: str, proj, occupied, areas,
                     continue
                 if not _way_through(openings, gated, gates, (x1, y), style):
                     continue
-                edges.setdefault((x1, y), {})["W"] = style
+                side = edges.setdefault((x1, y), {})
+                if real or "W" not in side:
+                    side["W"] = style
         if walk:
             ends[walk[0]] = style
             ends[walk[-1]] = style
