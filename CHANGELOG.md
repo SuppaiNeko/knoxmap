@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.6.1
 
 - **Half walls and missing walls inside buildings** (`knoxbuild/catalog.py`).
   Two of the game's own interior wall styles, `walls_commercial_02` at 16 and
