@@ -72,3 +72,8 @@ Add a `## <version>` section to CHANGELOG.md, then push a tag:
 
 GitHub Actions runs the checks, zips the repository as `KnoxMap-v1.1.zip` and
 publishes a release with that CHANGELOG section as its notes.
+
+The Discord server is told about releases and nothing else: the repository's
+webhook is subscribed to the `release` event alone. It used to carry `push`
+as well, which announced every commit in the channel people read for new
+versions.
