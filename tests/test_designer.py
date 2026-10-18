@@ -251,6 +251,26 @@ class ThePicture(unittest.TestCase):
     def test_an_empty_sheet_is_still_a_picture(self):
         self.assertTrue(D.preview(D.blank("house", 10, 10)).size)
 
+    def test_and_it_has_the_grid_on_it_before_anything_is_drawn(self):
+        # Asked for in #suggestions: the grid only turned up under a room
+        # once one was drawn, and the moment it is worth seeing is while you
+        # are deciding how big to make one.
+        px = D.scale_for(D.blank("house", 10, 10))
+        picture = D.preview(D.blank("house", 10, 10)).convert("RGB")
+        self.assertEqual(picture.getpixel((0, 0)), D.EMPTY_GRID_FIFTH)
+        self.assertEqual(picture.getpixel((px, px // 2)), D.EMPTY_GRID)
+        self.assertEqual(picture.getpixel((px // 2, px // 2)), D.OUTSIDE)
+
+    def test_the_grid_is_still_there_round_what_is_drawn(self):
+        design = D.clean({"width": 12, "height": 12, "storeys": 1,
+                          "rooms": [{"kind": "livingroom", "level": 0,
+                                     "x": 1, "y": 1, "w": 5, "h": 5}]})
+        px = D.scale_for(design)
+        picture = D.preview(design).convert("RGB")
+        # Well clear of the room, on a line of the grid.
+        self.assertIn(picture.getpixel((10 * px, 10 * px + px // 2)),
+                      (D.EMPTY_GRID, D.EMPTY_GRID_FIFTH))
+
     def test_asking_for_a_storey_that_is_not_there_gives_the_top_one(self):
         design = D.autofill(D.blank("house", 16, 12))
         self.assertEqual(D.preview(design, 9).size, D.preview(design, 0).size)

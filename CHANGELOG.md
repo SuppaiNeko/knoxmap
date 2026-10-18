@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The grid is on the sheet before anything is drawn on it**
+  (`knoxbuild/designer.py`). The hand-built building editor drew its grid
+  only under a room that was already there, which is the moment it stops
+  being useful: what it is for is judging how big to make the room you are
+  about to draw. The whole sheet carries it now, every fifth line darker so
+  tiles can be counted, and it stays visible round what is drawn. Asked for
+  in #suggestions by Zombaxx.
+
 ## 1.7.6.1
 
 - **Half walls and missing walls inside buildings** (`knoxbuild/catalog.py`).

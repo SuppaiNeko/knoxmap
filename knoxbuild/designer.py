@@ -490,6 +490,14 @@ DOOR = (196, 120, 40)
 WINDOW = (96, 170, 220)
 PIECE = (74, 70, 66)
 GRID = (214, 212, 206)
+# The sheet under the drawing. Asked for in #suggestions: the grid only
+# appeared under a room once one had been drawn, and a floor you are about to
+# draw is exactly when it is worth seeing - it is how you judge how big to
+# make the room. Every fifth line is darker so tiles can be counted without
+# following one across the whole sheet.
+EMPTY_GRID = (223, 222, 216)
+EMPTY_GRID_FIFTH = (209, 207, 200)
+GRID_EVERY = 5
 
 
 def room_colour(kind: str) -> tuple[int, int, int]:
@@ -518,6 +526,16 @@ def scale_for(design: dict, longest: int = 760) -> int:
     return max(4, min(26, longest // side))
 
 
+def _sheet_grid(pen, width: int, height: int, px: int) -> None:
+    """One square a tile, over the whole sheet, under whatever is drawn."""
+    for x in range(width + 1):
+        pen.line([x * px, 0, x * px, height * px],
+                 fill=EMPTY_GRID_FIFTH if x % GRID_EVERY == 0 else EMPTY_GRID)
+    for y in range(height + 1):
+        pen.line([0, y * px, width * px, y * px],
+                 fill=EMPTY_GRID_FIFTH if y % GRID_EVERY == 0 else EMPTY_GRID)
+
+
 def preview(design: dict, level: int = 0, scale: int | None = None,
             building: L.Building | None = None):
     """A picture of one storey: rooms, walls, doors, windows, furniture.
@@ -535,6 +553,7 @@ def preview(design: dict, level: int = 0, scale: int | None = None,
     px = scale or scale_for(design)
     img = Image.new("RGB", (width * px + 1, height * px + 1), OUTSIDE)
     pen = ImageDraw.Draw(img)
+    _sheet_grid(pen, width, height, px)
     if not built.storeys:
         return img
     level = min(max(level, 0), len(built.storeys) - 1)
