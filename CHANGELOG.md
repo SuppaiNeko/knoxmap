@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.6.2
 
 - **The front door is on the street** (`knoxbuild/layout.py`). The room a
   visitor should arrive in was chosen first, and the street only picked
