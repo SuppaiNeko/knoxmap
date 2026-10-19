@@ -2724,21 +2724,45 @@ def _exterior_door(plan: Plan, rng: random.Random,
                          if not plan.rooms[i - 1].is_shaft),
                         key=lambda i: (order.get(plan.rooms[i - 1].kind, 50),
                                        -plan.rooms[i - 1].area))
+
+    def from_stairs(wall) -> float:
+        """How far the middle of this wall is from the foot of the stairs."""
+        if avoid is None:
+            return 0.0
+        mid = wall[len(wall) // 2]
+        return abs(mid[0] - avoid[0]) + abs(mid[1] - avoid[1])
+
+    def score(run):
+        side, wall = run
+        # Facing the street, as front doors do; without that the door went on
+        # the south wall and half the paths wrapped round houses.
+        return (len(wall) >= 3, side == (street or "S"),
+                from_stairs(wall), len(wall))
+
+    # The street comes before the room. Taking the best room first and then
+    # its best wall put a house's door wherever its hall happened to be, and
+    # a hall that does not reach the street side - most of them - turned the
+    # house's back on it: 5 houses in 100 had a door on the street. A room
+    # anybody would walk in through and a wall on the street beats the room
+    # that would have been first; between two such rooms it is the room's own
+    # order, then the stairs, then the longer wall, as it always was.
+    facing = [(idx, run) for idx in candidates
+              if plan.rooms[idx - 1].kind in order
+              for run in _outside_runs(plan, idx)
+              if run[0] == (street or "S") and len(run[1]) >= 3]
+    if facing:
+        idx, (_side, wall) = min(facing, key=lambda ir: (
+            order.get(plan.rooms[ir[0] - 1].kind, 50),
+            -from_stairs(ir[1][1]), -len(ir[1][1])))
+        front = wall[len(wall) // 2]
+        plan.doors.append(front)
+        _more_ways_in(plan, front)
+        return
+
     for idx in candidates:
         runs = _outside_runs(plan, idx)
         if not runs:
             continue
-
-        def score(run):
-            side, wall = run
-            mid = wall[len(wall) // 2]
-            far = 0.0
-            if avoid is not None:
-                far = abs(mid[0] - avoid[0]) + abs(mid[1] - avoid[1])
-            # Facing the street, as front doors do; without that the door
-            # went on the south wall and half the paths wrapped round houses.
-            return (len(wall) >= 3, side == (street or "S"), far, len(wall))
-
         side, wall = max(runs, key=score)
         front = wall[len(wall) // 2]
         plan.doors.append(front)
@@ -3363,6 +3387,14 @@ def _place_windows(building: "Building", kind: str | None,
     house_like = kind in HOUSE_LIKE_KINDS
 
     for level, storey in enumerate(building.storeys):
+        # Where the floor below put its windows. A house is laid out room by
+        # room on every storey, so its rooms upstairs are not the rooms
+        # downstairs and its windows landed wherever this floor's rooms
+        # happened to want them: looking up at one from the street, 27 of
+        # every 100 upstairs windows stood above a window. A wall that has a
+        # window below it takes that column first, and the even spacing fills
+        # whatever is left.
+        under = set(building.storeys[level - 1].windows) if level else set()
         blocked = set(getattr(storey, "wall_pieces", set())) | storey.party
         # No window where a tile carries both a west and a north wall - the
         # inside corner of every step down a diagonal side. BuildingEd draws
@@ -3414,6 +3446,28 @@ def _place_windows(building: "Building", kind: str | None,
             placed.append(edge)
 
         taken: dict[int, int] = {}
+        if house_like and under:
+            # Every column the floor below glazed, in one pass over the
+            # facade rather than room by room: the room boundaries upstairs
+            # are not the ones downstairs, and asking per room left half the
+            # columns to the even spacing again.
+            where = {(x, y, d): (ix, iy)
+                     for _side, wall in _facade_runs(storey.grid)
+                     for x, y, d, ix, iy in wall}
+            for edge in sorted(under):
+                spot = where.get(edge)
+                if spot is None or edge in blocked or not spaced(*edge):
+                    continue
+                idx = storey.grid[spot[1]][spot[0]]
+                if not idx:
+                    continue
+                room = storey.rooms[idx - 1]
+                cap = 0 if room.is_core else ROOM_WINDOW_CAP.get(
+                    room.kind, DEFAULT_ROOM_WINDOW_CAP)
+                if room.is_shaft or taken.get(idx, 0) >= cap:
+                    continue
+                add(edge)
+                taken[idx] = taken.get(idx, 0) + 1
         if house_like:
             # A house's windows are placed room by room, centred on each
             # outside wall and evenly spread along it, as Knox County's are.
@@ -3432,7 +3486,7 @@ def _place_windows(building: "Building", kind: str | None,
                     n = max(1, min(cap - taken.get(idx, 0),
                                    (len(wall) + 1) // HOUSE_WINDOW_EVERY))
                     for k in range(n):
-                        i = int((k + 0.5) * len(wall) / n)
+                        i = int((k + 0.5) * len(wall) / max(1, n))
                         # The nearest spot to the even spacing that is clear
                         # of doors, corners and the other windows.
                         for j in sorted(range(1, len(wall) - 1), key=lambda j: abs(j - i)):

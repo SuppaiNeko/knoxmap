@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **The front door is on the street** (`knoxbuild/layout.py`). The room a
+  visitor should arrive in was chosen first, and the street only picked
+  which of that room's walls got the door - so a house whose hall does not
+  reach the street side, which is most of them, had its door round the back:
+  5 houses in 100 opened onto the street they stand on. The street is asked
+  first now, of every room anybody would walk in through, and the room's own
+  order decides between the ones that face it. Counted again over the same
+  buildings and all four street directions: 100 in 100, houses, flats, shops,
+  schools and civic buildings alike. Reported by Zombaxx.
+
+
+- **A house's upstairs windows stand above its downstairs ones**
+  (`knoxbuild/layout.py`). A block of flats repeats its floor plan, so its
+  windows always lined up; a house is laid out room by room on every storey,
+  the rooms upstairs are not the rooms downstairs, and each floor put its
+  windows where its own rooms wanted them. Counted over generated houses, 27
+  of every 100 upstairs windows stood above a window - which is what gives a
+  generated street away, since a real facade is built in columns. An upper
+  floor now takes the columns the floor below glazed wherever its own wall
+  can carry one, and fills the rest by the spacing as before: 73 of 100.
+  Reported by Zombaxx.
+
+
 - **A fence you mapped or drew is not paved over by one of ours**
   (`knoxbuild/fences.py`). The fences put round back yards were built last,
   and the last fence to claim a tile edge kept it, so an OpenStreetMap fence

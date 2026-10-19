@@ -118,5 +118,53 @@ class TheSideAFrontDoorFaces(unittest.TestCase):
         self.assertEqual(self.ground(paint)(10, 16, 6, 4), "N")
 
 
+class TheDoorIsOnTheStreet(unittest.TestCase):
+    """Which room the door is in matters less than which way it faces.
+
+    The best room to arrive in was chosen first and the street only decided
+    which of that room's walls got the door. A house's hall rarely reaches
+    the street side, so the door went round the back: counted over generated
+    houses, 5 in 100 had a door on the street. Reported in #bug-reports by
+    Zombaxx - "entrance door placement not always facing the closest street".
+    """
+
+    def doors_facing(self, kind, street, seeds=range(12)):
+        """How many of these buildings have an outside door on the street."""
+        from knoxbuild.layout import _outside_runs, build_building
+
+        facing = built = 0
+        for seed in seeds:
+            plan = build_building(20, 16, levels=2, seed=seed, street=street,
+                                  kind=None if kind == "house" else kind,
+                                  commercial=kind not in ("house", "apartment"))
+            ground = plan.storeys[0]
+            doors = set(ground.doors)
+            sides = {side for idx in range(1, len(ground.rooms) + 1)
+                     for side, wall in _outside_runs(ground, idx)
+                     for edge in wall if edge in doors
+                     for side in (side,)}
+            if not sides:
+                continue
+            built += 1
+            facing += street in sides
+        return facing, built
+
+    def test_every_kind_opens_onto_the_street_it_stands_on(self):
+        for kind in ("house", "apartment", "shop", "civic", "school"):
+            for street in ("N", "S", "W", "E"):
+                with self.subTest(kind=kind, street=street):
+                    facing, built = self.doors_facing(kind, street)
+                    self.assertTrue(built, "nothing was built")
+                    self.assertEqual(facing, built,
+                                     f"{kind}: {facing} of {built} face {street}")
+
+    def test_with_no_street_it_still_puts_a_door_somewhere(self):
+        from knoxbuild.layout import build_building
+
+        for seed in range(6):
+            plan = build_building(20, 16, levels=2, seed=seed, kind=None)
+            self.assertTrue(plan.storeys[0].doors)
+
+
 if __name__ == "__main__":
     unittest.main()
