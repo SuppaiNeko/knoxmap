@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -23,6 +24,10 @@ import requests
 
 import knoxpaths
 import knoxstop
+
+from . import areacache
+
+log = logging.getLogger("knoxmap.osm")
 
 # Both lists can be replaced from knoxmap_config.json, which updates leave
 # alone, so a dead public instance can be swapped without editing the source:
@@ -350,6 +355,36 @@ class OverpassError(RuntimeError):
         self.busy = busy
 
 
+class Offline(OverpassError):
+    """A download asked for while KnoxMap was told not to download."""
+
+
+def offline() -> bool:
+    """Whether downloading is switched off, so maps are made only from what
+    is already on disk: KNOXMAP_OFFLINE=1, or "osm_offline": true in
+    knoxmap_config.json. For trying settings over and over on one place
+    without asking the public servers for it each time."""
+    # Set at all, the environment wins, so KNOXMAP_OFFLINE=0 downloads for
+    # one run whatever the config says.
+    said = os.environ.get("KNOXMAP_OFFLINE", "").strip().lower()
+    if said:
+        return said in ("1", "true", "yes", "on")
+    try:
+        return knoxpaths.load_config().get("osm_offline") is True
+    except Exception:
+        return False
+
+
+def _refuse_if_offline(south: float, west: float, north: float, east: float) -> None:
+    if offline():
+        raise Offline(
+            f"Offline mode is on (KNOXMAP_OFFLINE or osm_offline), and "
+            f"{_area_km2(south, west, north, east):.2f} km2 of this map "
+            f"({south:.5f},{west:.5f} to {north:.5f},{east:.5f}) has never been "
+            f"downloaded. Make a map that covers it with offline mode off "
+            f"first, or pick an area inside one already made.")
+
+
 # Overpass says "query timed out" and "out of memory" with HTTP 400, the same
 # status it uses for a syntax error. Reading the status alone turns "your area
 # is too big for this server" into "Bad Request", which sends you looking for a
@@ -427,6 +462,7 @@ def fetch_features(south: float, west: float, north: float, east: float,
     one says the query was too heavy - and reporting only the last of those
     describes the least interesting failure as though it were the whole story.
     """
+    _refuse_if_offline(south, west, north, east)
     query = _build_query(south, west, north, east, timeout=timeout)
     errors: list[str] = []
     too_big = False
@@ -477,6 +513,8 @@ def fetch_features(south: float, west: float, north: float, east: float,
 def explain(exc: BaseException) -> str:
     """What went wrong and what to do about it, for someone who is not reading
     Overpass logs. The technical reason follows, for anyone who is."""
+    if isinstance(exc, Offline):
+        return str(exc)
     if isinstance(exc, OverpassError):
         if exc.too_big:
             head = ("That area has more map data than the public servers will "
@@ -580,9 +618,17 @@ def _flat(points):
             yield from _flat(p)
 
 
+def _tile_steps(south: float, west: float, north: float, east: float,
+                max_tile_km2: float) -> int:
+    """How many tiles a side fetch_features_tiled cuts this box into."""
+    area = _area_km2(south, west, north, east)
+    return max(1, math.ceil(math.sqrt(area / max_tile_km2)))
+
+
 def fetch_features_tiled(south: float, west: float, north: float, east: float,
                          max_tile_km2: float = 30.0, timeout: int = 90,
-                         progress=None, should_stop=None) -> list[OSMFeature]:
+                         progress=None, should_stop=None,
+                         probe: bool = True) -> list[OSMFeature]:
     """Fetch a large bbox as a grid of smaller Overpass queries.
 
     One query over a big area either times out or gets refused - that, not the
@@ -601,15 +647,17 @@ def fetch_features_tiled(south: float, west: float, north: float, east: float,
     (`out geom` gives complete geometry regardless of clipping), so features are
     de-duplicated on (kind, osm_id) and keep their whole shape.
     """
-    area = _area_km2(south, west, north, east)
-    steps = max(1, math.ceil(math.sqrt(area / max_tile_km2)))
+    # Before the probe, which is a request of its own.
+    _refuse_if_offline(south, west, north, east)
+    steps = _tile_steps(south, west, north, east, max_tile_km2)
     # A map small enough to be one tile goes the same way as any other. It
     # used to return straight from here, which meant it never reached the
     # retry below: the smaller the area the less it tried, and "a smaller area
     # always works" is what the failure tells people to do. A 6.8 km2 town
     # failed after one pass while a city got three.
 
-    check_endpoints(south, west, north, east)
+    if probe:
+        check_endpoints(south, west, north, east)
 
     d_lat = (north - south) / steps
     d_lon = (east - west) / steps
@@ -827,6 +875,18 @@ def load_cache(path: str, bbox: tuple[float, float, float, float],
     an older file there does not get the new tags, it loses every road, river
     and wood the map already has.
     """
+    got = _read_cache(path, filters)
+    if got is None:
+        return None
+    cached, feats = got
+    if any(abs(a - b) > 1e-9 for a, b in zip(cached, bbox)):
+        return None
+    return feats
+
+
+def _read_cache(path: str, filters: int | None
+                ) -> tuple[tuple, list[OSMFeature]] | None:
+    """A saved download's box and features, whatever box it covers."""
     if not os.path.exists(path):
         return None
     # A cache is only ever a shortcut: whatever is wrong with the file - cut
@@ -839,8 +899,9 @@ def load_cache(path: str, bbox: tuple[float, float, float, float],
         if filters is not None and payload.get("filters") != filters:
             return None
         cached = payload.get("bbox") or []
-        if len(cached) != 4 or any(abs(a - b) > 1e-9 for a, b in zip(cached, bbox)):
+        if len(cached) != 4:
             return None
+        cached = tuple(float(v) for v in cached)
         out = []
         for d in payload.get("features", []):
             out.append(OSMFeature(
@@ -849,9 +910,115 @@ def load_cache(path: str, bbox: tuple[float, float, float, float],
                 [(role, [tuple(c) for c in ring])
                  for role, ring in d.get("role_geoms") or []],
             ))
-        return out
+        return cached, out
     except (OSError, EOFError, ValueError, KeyError, TypeError, AttributeError, zlib.error):
         return None
+
+
+# Every download, kept by the area it covers and shared by every map
+# (generator/areacache.py). The file beside a map is that map's alone, and its
+# box moves with the scale, the turn and the name; this one is found for any
+# map inside it, or for one that reaches part way past it.
+AREA_CACHE_DIR = os.path.join(str(knoxpaths.BASE_DIR), "cache", "osm_areas")
+AREA_CACHE_MAX_AGE_S = TILE_CACHE_MAX_AGE_S
+
+
+def _area_tag() -> str:
+    return f"f{FILTERS_VERSION}"
+
+
+def _crop(feats: list[OSMFeature], box: tuple) -> list[OSMFeature]:
+    """The features that reach into `box`, each one whole.
+
+    That is what Overpass sends for a box too: a way that crosses the edge
+    comes with all of its geometry. Measured on the feature's own extent, so
+    a road or a lake passing through with no point inside is kept as well.
+    """
+    kept = []
+    for f in feats:
+        lats, lons = [], []
+        for lat, lon in _flat([f.geometry, [ring for _r, ring in f.role_geoms]]):
+            lats.append(lat)
+            lons.append(lon)
+        if not lats or areacache.intersects(
+                (min(lats), min(lons), max(lats), max(lons)), box):
+            kept.append(f)
+    return kept
+
+
+def merge(*lists: Iterable[OSMFeature]) -> list[OSMFeature]:
+    """One list, each feature once. A way crossing from one download into
+    another comes whole in both; the later list wins, being the newer."""
+    merged: dict[tuple[str, int], OSMFeature] = {}
+    for feats in lists:
+        for f in feats:
+            merged[(f.kind, f.osm_id)] = f
+    return list(merged.values())
+
+
+def area_cache_get(box: tuple) -> tuple[list[OSMFeature], list[tuple]]:
+    """What the stored downloads hold of `box`, and the parts they do not.
+
+    Returns (features, missing): `missing` is empty when one download holds
+    the whole box, and otherwise the strips still to fetch - all of `box`
+    when nothing on disk touches it.
+
+    Offline, a download is taken at any age and, failing one made with the
+    current filter list, with an older one: there is nothing else to be had.
+    """
+    box = tuple(box)
+    current = _area_tag()
+    if offline():
+        found = areacache.find(AREA_CACHE_DIR, box, None, None)
+        found.sort(key=lambda c: (not areacache.contains(c[1], box), c[2] != current))
+    else:
+        found = areacache.find(AREA_CACHE_DIR, box, [current], AREA_CACHE_MAX_AGE_S)
+    for path, _named, tag in found:
+        got = _read_cache(path, None if tag != current else FILTERS_VERSION)
+        if got is None:
+            continue
+        stored, feats = got
+        if tag != current:
+            log.warning("offline: using %s, downloaded with an older filter list "
+                        "(%s, now %s) - it may lack what was added since",
+                        os.path.basename(path), tag, current)
+        return _crop(feats, box), areacache.subtract(box, stored)
+    return [], [box]
+
+
+def area_cache_put(box: tuple, feats: list[OSMFeature]) -> None:
+    """Keep a download for every map, and drop the smaller ones it covers."""
+    box = tuple(box)
+    path = areacache.path_for(AREA_CACHE_DIR, box, _area_tag())
+    try:
+        save_cache(path, box, feats)
+    except OSError:
+        return    # a download that cannot be kept still makes the map
+    areacache.prune(AREA_CACHE_DIR, box, _area_tag(), keep=path)
+
+
+def fetch_missing(have: list[OSMFeature], missing: list[tuple],
+                  max_tile_km2: float = 30.0, progress=None,
+                  should_stop=None) -> list[OSMFeature]:
+    """`have`, plus whatever is in the `missing` strips, downloaded.
+
+    The progress counts across every strip, so the bar runs once from start
+    to end rather than once per strip. The servers are probed once, for the
+    first strip, not again for each.
+    """
+    counts = [_tile_steps(*b, max_tile_km2) ** 2 for b in missing]
+    grand = sum(counts)
+    fetched = []
+    for i, strip in enumerate(missing):
+        before = sum(counts[:i])
+
+        def part(done, total, note="", before=before):
+            _say(progress, before + done, grand, note)
+
+        fetched.append(fetch_features_tiled(
+            *strip, max_tile_km2=max_tile_km2, progress=part,
+            should_stop=should_stop, probe=i == 0))
+    return merge(have, *fetched)
 
 
 def assemble_rings(role_geoms: list[tuple[str, list[tuple[float, float]]]]

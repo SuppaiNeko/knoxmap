@@ -3680,6 +3680,13 @@ def main(argv: list[str]) -> int:
     check = Checks()
     work = tempfile.mkdtemp(prefix="knoxmap-selftest-")
     os.environ["KNOXMAP_LOG_DIR"] = os.path.join(work, "logs")
+    # The checks that stub the download need generate to reach it: not to be
+    # answered from this PC's real store of downloads, nor stopped by offline.
+    os.environ["KNOXMAP_OFFLINE"] = "0"
+    from generator import osm as _store_osm
+    from generator import overture as _store_overture
+    _store_osm.AREA_CACHE_DIR = os.path.join(work, "osm_areas")
+    _store_overture.AREA_CACHE_DIR = os.path.join(work, "overture_areas")
     try:
         from generator import renderer
         from knoxbuild.build import build

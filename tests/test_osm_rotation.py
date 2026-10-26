@@ -31,6 +31,10 @@ class Base(unittest.TestCase):
         p = mock.patch.object(osm.time, "sleep", lambda s: None)
         p.start()
         self.addCleanup(p.stop)
+        # These fake the network; offline mode on this PC must not stop them.
+        q = mock.patch.object(osm, "offline", lambda: False)
+        q.start()
+        self.addCleanup(q.stop)
         self.addCleanup(osm._cooling.clear)
 
 

@@ -41,6 +41,8 @@ import math
 import os
 import threading
 
+from . import areacache
+from . import osm as _osm
 from .osm import OSMFeature
 
 # The release this was written against. Overture publishes monthly and keeps
@@ -101,21 +103,76 @@ def save_cache(path: str, bbox: tuple[float, float, float, float],
 def load_cache(path: str,
                bbox: tuple[float, float, float, float]) -> list[dict] | None:
     """What was fetched for exactly this box and release, or None."""
+    got = _read_cache(path)
+    if got is None:
+        return None
+    kept, found = got
+    if not all(abs(a - b) < 1e-9 for a, b in zip(kept, bbox)):
+        return None
+    return found
+
+
+def _read_cache(path: str) -> tuple[tuple, list[dict]] | None:
+    """A saved fetch of this release: its box and its buildings."""
     if not os.path.exists(path):
         return None
     try:
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             payload = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, EOFError, ValueError):
         return None
-    if payload.get("release") != release():
+    if not isinstance(payload, dict) or payload.get("release") != release():
         return None
     kept = payload.get("bbox")
-    if not (isinstance(kept, list) and len(kept) == 4
-            and all(abs(a - b) < 1e-9 for a, b in zip(kept, bbox))):
-        return None
     found = payload.get("buildings")
-    return found if isinstance(found, list) else None
+    if not (isinstance(kept, list) and len(kept) == 4 and isinstance(found, list)):
+        return None
+    try:
+        return tuple(float(v) for v in kept), found
+    except (TypeError, ValueError):
+        return None
+
+
+# Every fetch, kept by the box it covers for any map inside it, as the
+# Overpass downloads are (generator/areacache.py). Only a fetch that holds the
+# whole map is used: nearly all of a fetch's minutes go on reading the theme's
+# metadata, whatever the size of the box, so fetching the strips a bigger map
+# lacks would cost a whole fetch per strip. A release never changes, so these
+# do not go stale.
+AREA_CACHE_DIR = os.path.join(os.path.dirname(_osm.AREA_CACHE_DIR), "overture_areas")
+
+
+def _crop(rows: list[dict], box: tuple) -> list[dict]:
+    kept = []
+    for row in rows:
+        pts = [p for ring in _rings(row.get("geometry") or {}) for p in ring]
+        if not pts or areacache.intersects(
+                (min(p[0] for p in pts), min(p[1] for p in pts),
+                 max(p[0] for p in pts), max(p[1] for p in pts)), box):
+            kept.append(row)
+    return kept
+
+
+def area_cache_get(box: tuple) -> list[dict] | None:
+    """The buildings of `box` out of a stored fetch that holds all of it."""
+    box = tuple(box)
+    for path, stored, _tag in areacache.find(AREA_CACHE_DIR, box, [release()]):
+        if not areacache.contains(stored, box):
+            break     # the rest only overlap it
+        got = _read_cache(path)
+        if got is not None:
+            return _crop(got[1], box)
+    return None
+
+
+def area_cache_put(box: tuple, rows: list[dict]) -> None:
+    box = tuple(box)
+    path = areacache.path_for(AREA_CACHE_DIR, box, release())
+    try:
+        save_cache(path, box, rows)
+    except OSError:
+        return
+    areacache.prune(AREA_CACHE_DIR, box, release(), keep=path)
 
 
 def _query(south: float, west: float, north: float, east: float) -> str:
@@ -315,9 +372,21 @@ def add_missing(features: list[OSMFeature],
     # handed to somebody else carries its buildings with it.
     path = cache_path(output_dir, map_name)
     rows = load_cache(path, bbox)
+    if rows is None:
+        # Then a fetch made for another map that holds this one.
+        rows = area_cache_get(bbox)
+        if rows is not None:
+            try:
+                save_cache(path, bbox, rows)
+            except OSError:
+                pass
     if rows is not None:
         stats["cached"] = True
     else:
+        if _osm.offline():
+            stats["why"] = ("Offline mode is on, and Overture has not been "
+                            "fetched for an area holding this map.")
+            return features, stats
         if not stats["available"]:
             stats["why"] = why_unavailable()
             return features, stats
@@ -326,6 +395,7 @@ def add_missing(features: list[OSMFeature],
             save_cache(path, bbox, rows)
         except OSError:
             pass          # a fetch that cannot be cached is still a fetch
+        area_cache_put(bbox, rows)
     stats["fetched"] = len(rows)
 
     extra = only_missing(to_features(rows), features)

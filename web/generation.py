@@ -177,31 +177,41 @@ def generate():
     # asked at all, which is also the only way to make a map of a place that
     # is not on OpenStreetMap - one never surveyed, or one that does not exist.
     features = [] if drawn_only else osm.load_cache(cache, fetch_box)
+    source = "drawn by hand" if drawn_only else "this map's own download"
     if features is None:
-        _set_progress(map_name, stage="osm", done=0, total=1)
-        def _progress(i, total, note=""):
-            _set_progress(map_name, stage="osm", done=i - 1, total=total,
-                          note=note)
+        # Then any earlier download that covers it, whatever map it was made
+        # for and at whatever scale or turn: only what it lacks is fetched.
+        features, missing = osm.area_cache_get(fetch_box)
+        source = "the shared download store"
+        if missing:
+            source = (f"the shared download store and {len(missing)} new strip(s)"
+                      if features else "a new download")
+            _set_progress(map_name, stage="osm", done=0, total=1)
+            def _progress(i, total, note=""):
+                _set_progress(map_name, stage="osm", done=i - 1, total=total,
+                              note=note)
 
-        try:
-            # Always through the tiled path, even for a small area: with one
-            # tile it is the same single request, and it brings the retry that
-            # quarters a bbox the servers call too heavy.
-            features = osm.fetch_features_tiled(
-                *fetch_box, max_tile_km2=OVERPASS_TILE_KM2, progress=_progress,
-                should_stop=_stopper(map_name))
-        except knoxstop.Stopped:
-            forget_empty_folder()
-            return _stopped(map_name, "generate")
-        except Exception as exc:  # Overpass can be flaky — surface that clearly
-            message = osm.explain(exc)
-            _set_progress(map_name, stage="error", message=message)
-            forget_empty_folder()
-            return failed(message, 502, exc)
+            try:
+                # Always through the tiled path, even for a small area: with
+                # one tile it is the same single request, and it brings the
+                # retry that quarters a bbox the servers call too heavy.
+                features = osm.fetch_missing(
+                    features, missing, max_tile_km2=OVERPASS_TILE_KM2,
+                    progress=_progress, should_stop=_stopper(map_name))
+            except knoxstop.Stopped:
+                forget_empty_folder()
+                return _stopped(map_name, "generate")
+            except Exception as exc:  # Overpass can be flaky — surface that clearly
+                message = osm.explain(exc)
+                _set_progress(map_name, stage="error", message=message)
+                forget_empty_folder()
+                return failed(message, 409 if isinstance(exc, osm.Offline) else 502, exc)
+            osm.area_cache_put(fetch_box, features)
         try:
             osm.save_cache(cache, fetch_box, features)
         except OSError:
             pass  # a map that cannot be cached still renders
+    log.info("generate %s: %d features from %s", map_name, len(features), source)
 
     # Buildings Overture has and OpenStreetMap has not, before anything is
     # measured from them: they are ordinary building features from here on,
